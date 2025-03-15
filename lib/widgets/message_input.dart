@@ -1,16 +1,19 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'dart:ui';
 
 class MessageInput extends StatefulWidget {
   final TextEditingController controller;
   final Function(String) onSend;
   final bool isLoading;
+  final FocusNode? focusNode;
 
   const MessageInput({
     super.key,
     required this.controller,
     required this.onSend,
     required this.isLoading,
+    this.focusNode,
   });
 
   @override
@@ -19,6 +22,35 @@ class MessageInput extends StatefulWidget {
 
 class _MessageInputState extends State<MessageInput> {
   bool get _isComposing => widget.controller.text.isNotEmpty;
+  late final FocusNode _focusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    _focusNode = widget.focusNode ?? FocusNode();
+  }
+
+  @override
+  void dispose() {
+    if (widget.focusNode == null) {
+      _focusNode.dispose();
+    }
+    super.dispose();
+  }
+
+  // Handle keyboard key events
+  KeyEventResult _handleKeyPress(FocusNode node, KeyEvent event) {
+    // Check if it's a key down event and the key is Enter (without shift pressed)
+    if (event is KeyDownEvent &&
+        event.logicalKey == LogicalKeyboardKey.enter &&
+        !(HardwareKeyboard.instance.isShiftPressed)) {
+      if (_isComposing && !widget.isLoading) {
+        _handleSubmitted(widget.controller.text);
+        return KeyEventResult.handled;
+      }
+    }
+    return KeyEventResult.ignored;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -41,26 +73,30 @@ class _MessageInputState extends State<MessageInput> {
           // Text input row - expandable
           Padding(
             padding: const EdgeInsets.fromLTRB(16.0, 12.0, 16.0, 4.0),
-            child: TextField(
-              controller: widget.controller,
-              onChanged: (text) {
-                setState(() {});
-              },
-              enabled: !widget.isLoading,
-              decoration: InputDecoration(
-                hintText:
-                    widget.isLoading
-                        ? 'Waiting for response...'
-                        : 'Type a message...',
-                border: InputBorder.none,
-                isDense: true,
-                contentPadding: EdgeInsets.zero,
+            child: Focus(
+              onKeyEvent: _handleKeyPress,
+              child: TextField(
+                controller: widget.controller,
+                focusNode: _focusNode,
+                onChanged: (text) {
+                  setState(() {});
+                },
+                enabled: !widget.isLoading,
+                decoration: InputDecoration(
+                  hintText:
+                      widget.isLoading
+                          ? 'Waiting for response...'
+                          : 'Type a message... (Press Enter to send)',
+                  border: InputBorder.none,
+                  isDense: true,
+                  contentPadding: EdgeInsets.zero,
+                ),
+                textInputAction: TextInputAction.newline,
+                keyboardType: TextInputType.multiline,
+                minLines: 1,
+                maxLines: 5,
+                style: const TextStyle(fontSize: 16.0),
               ),
-              textInputAction: TextInputAction.newline,
-              keyboardType: TextInputType.multiline,
-              minLines: 1,
-              maxLines: 5,
-              style: const TextStyle(fontSize: 16.0),
             ),
           ),
 

@@ -8,31 +8,39 @@ import 'providers/theme_provider.dart';
 import 'services/logger_service.dart';
 import 'router/app_router.dart';
 import 'router/app_navigation.dart';
+// import 'utils/keyboard_shortcut_manager.dart';
+
 // import 'router/browser_url_manager.dart'; // Import new URL manager
 // For web URL strategy
 // import 'web_url_strategy.dart'
 //    if (dart.library.html) 'package:flutter_web_plugins/flutter_web_plugins.dart';
 // import 'test_fonts.dart'; // Comment out this line
 
-// Configure the URL strategy for web (removes the hash from URLs)
-void configureApp() {
-  if (kIsWeb) {
-    try {
-      // Just log that we're initializing - the Router will handle the URL
-      print('Initializing URL handling for web');
+/// Keyboard Shortcuts:
+/// - Enter: Send message
+/// - Cmd+B (or Ctrl+B on Windows/Linux): Toggle sidebar
+/// - Cmd+I (or Ctrl+I on Windows/Linux): Focus on message input
+/// - Shift+Enter: Insert new line in message
+///
+/// Configure the URL strategy for web (removes the hash from URLs)
+// void configureApp() {
+//   if (kIsWeb) {
+//     try {
+//       // Just log that we're initializing - the Router will handle the URL
+//       print('Initializing URL handling for web');
 
-      // We'll let the Router handle URL initialization to prevent conflicts
-    } catch (e) {
-      print('Failed to configure URL handling: $e');
-    }
-  }
-}
+//       // We'll let the Router handle URL initialization to prevent conflicts
+//     } catch (e) {
+//       print('Failed to configure URL handling: $e');
+//     }
+//   }
+// }
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // Set up URL strategy for web
-  configureApp();
+  // configureApp();
 
   // Initialize the logger service
   final logger = LoggerService();
