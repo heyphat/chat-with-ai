@@ -1,17 +1,31 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import '../models/chat.dart';
-import '../models/message.dart';
 import '../providers/chat_provider.dart';
 import '../providers/theme_provider.dart';
 import '../widgets/chat_sidebar.dart';
 import '../widgets/chat_message_list.dart';
 import '../widgets/message_input.dart';
+// import '../router/web_url_handler.dart';
+import '../router/browser_url_manager.dart';
 import 'settings_screen.dart';
-import 'chat_history_screen.dart';
+
+// Use a global variable to preserve sidebar state across navigations
+// This ensures the sidebar state is maintained when switching between chats
+bool _globalShowSidebar = false;
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  final VoidCallback? routeToSettings;
+  final VoidCallback? routeToChatHistory;
+  final void Function(String)? routeToChatDetail;
+
+  const HomeScreen({
+    super.key,
+    this.routeToSettings,
+    this.routeToChatHistory,
+    this.routeToChatDetail,
+  });
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -19,7 +33,52 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   final TextEditingController _messageController = TextEditingController();
-  bool _showSidebar = true;
+  bool _showSidebar = false;
+  bool _isLoadingChat = false;
+  // Track the last active chat ID to prevent unnecessary state changes
+  String? _lastActiveChatId;
+
+  @override
+  void initState() {
+    super.initState();
+
+    // Use the global sidebar state
+    _showSidebar = _globalShowSidebar;
+
+    // Add this to initialize with a new chat when no history
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // Check if the widget is still mounted before accessing context
+      if (!mounted) return;
+
+      final chatProvider = Provider.of<ChatProvider>(context, listen: false);
+
+      // If there are no chats, automatically create a new one and keep sidebar closed
+      if (chatProvider.chatMetadata.isEmpty) {
+        // Create a new chat with default OpenAI model
+        final AIProvider defaultProvider = AIProvider.openai;
+        final String defaultModel = ChatProvider.openAIModels.keys.first;
+
+        // Create the chat and get the new chat ID
+        final newChatId = await chatProvider.createChat(
+          defaultProvider,
+          defaultModel,
+        );
+
+        // Initialize global state to closed for new users
+        _globalShowSidebar = false;
+        _showSidebar = false;
+
+        // Now update the URL with the new chat ID
+        if (kIsWeb) {
+          final chatUrl = '/chats/$newChatId';
+          BrowserUrlManager.updateUrl(chatUrl);
+
+          // Update tracking variable
+          _lastActiveChatId = newChatId;
+        }
+      }
+    });
+  }
 
   @override
   void dispose() {
@@ -30,112 +89,63 @@ class _HomeScreenState extends State<HomeScreen> {
   void _toggleSidebar() {
     setState(() {
       _showSidebar = !_showSidebar;
+      _globalShowSidebar = _showSidebar; // Update global state when toggled
     });
   }
 
-  void _showNewChatDialog() {
-    showDialog(
-      context: context,
-      builder: (context) {
-        AIProvider selectedProvider = AIProvider.openai;
-        String selectedModel = ChatProvider.openAIModels.keys.first;
+  // Wrapper for setActiveChat to show loading state
+  Future<void> _setActiveChat(String chatId) async {
+    // Skip if we're already on this chat
+    if (_lastActiveChatId == chatId) return;
 
-        return StatefulBuilder(
-          builder: (context, setState) {
-            return AlertDialog(
-              title: const Text('New Chat'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('Select AI Provider:'),
-                  const SizedBox(height: 8),
-                  DropdownButton<AIProvider>(
-                    value: selectedProvider,
-                    isExpanded: true,
-                    onChanged: (value) {
-                      setState(() {
-                        selectedProvider = value!;
-                        // Update model based on provider
-                        switch (selectedProvider) {
-                          case AIProvider.openai:
-                            selectedModel = ChatProvider.openAIModels.keys.first;
-                            break;
-                          case AIProvider.anthropic:
-                            selectedModel = ChatProvider.anthropicModels.keys.first;
-                            break;
-                          case AIProvider.gemini:
-                            selectedModel = ChatProvider.geminiModels.keys.first;
-                            break;
-                        }
-                      });
-                    },
-                    items: AIProvider.values.map((provider) {
-                      return DropdownMenuItem(
-                        value: provider,
-                        child: Text(provider.name),
-                      );
-                    }).toList(),
-                  ),
-                  const SizedBox(height: 16),
-                  const Text('Select Model:'),
-                  const SizedBox(height: 8),
-                  DropdownButton<String>(
-                    value: selectedModel,
-                    isExpanded: true,
-                    onChanged: (value) {
-                      setState(() {
-                        selectedModel = value!;
-                      });
-                    },
-                    items: _getModelItemsForProvider(selectedProvider),
-                  ),
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Cancel'),
-                ),
-                ElevatedButton(
-                  onPressed: () {
-                    Navigator.pop(context);
-                    Provider.of<ChatProvider>(context, listen: false)
-                        .createChat(selectedProvider, selectedModel);
-                  },
-                  child: const Text('Create'),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
+    // Only set loading state without changing sidebar
+    setState(() {
+      _isLoadingChat = true;
+    });
+
+    try {
+      // Use the router if available, otherwise directly set active chat
+      if (widget.routeToChatDetail != null) {
+        widget.routeToChatDetail!(chatId);
+      } else {
+        final chatProvider = Provider.of<ChatProvider>(context, listen: false);
+        await chatProvider.setActiveChat(chatId);
+
+        // Only update URL here if we're not using the router
+        if (kIsWeb) {
+          final chatUrl = '/chats/$chatId';
+          BrowserUrlManager.updateUrl(chatUrl);
+        }
+      }
+
+      // Update tracking variable
+      _lastActiveChatId = chatId;
+    } finally {
+      setState(() {
+        _isLoadingChat = false;
+      });
+    }
   }
 
-  List<DropdownMenuItem<String>> _getModelItemsForProvider(AIProvider provider) {
-    switch (provider) {
-      case AIProvider.openai:
-        return ChatProvider.openAIModels.entries
-            .map((entry) => DropdownMenuItem(
-                  value: entry.key,
-                  child: Text(entry.value),
-                ))
-            .toList();
-      case AIProvider.anthropic:
-        return ChatProvider.anthropicModels.entries
-            .map((entry) => DropdownMenuItem(
-                  value: entry.key,
-                  child: Text(entry.value),
-                ))
-            .toList();
-      case AIProvider.gemini:
-        return ChatProvider.geminiModels.entries
-            .map((entry) => DropdownMenuItem(
-                  value: entry.key,
-                  child: Text(entry.value),
-                ))
-            .toList();
+  void _showNewChatDialog() async {
+    // Create a new chat directly with the default OpenAI model
+    final AIProvider defaultProvider = AIProvider.openai;
+    final String defaultModel = ChatProvider.openAIModels.keys.first;
+    final chatProvider = Provider.of<ChatProvider>(context, listen: false);
+
+    // Create new chat and get the new chat ID
+    final newChatId = await chatProvider.createChat(
+      defaultProvider,
+      defaultModel,
+    );
+
+    // Update the URL after chat creation
+    if (kIsWeb) {
+      final chatUrl = '/chats/$newChatId';
+      BrowserUrlManager.updateUrl(chatUrl);
+
+      // Update tracking variable
+      _lastActiveChatId = newChatId;
     }
   }
 
@@ -144,38 +154,98 @@ class _HomeScreenState extends State<HomeScreen> {
     final chatProvider = Provider.of<ChatProvider>(context);
     final themeProvider = Provider.of<ThemeProvider>(context);
 
+    // We don't need to update tracking variable here anymore with global state approach
+
     return Scaffold(
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
-        title: Text(chatProvider.activeChat?.title != null ? 'AI Chat - ${chatProvider.activeChat?.title}' : 'AI Chat'),
+        // Prevent app bar color/elevation changes during scrolling
+        scrolledUnderElevation:
+            0, // Set to 0 to prevent elevation change on scroll
+        backgroundColor:
+            Theme.of(
+              context,
+            ).scaffoldBackgroundColor, // Match with scaffold background
+        surfaceTintColor:
+            Colors
+                .transparent, // Remove surface tint that can cause color shifts
+        elevation: 0, // Set a consistent elevation
+        title:
+            chatProvider.activeChat != null
+                ? InkWell(
+                  onTap: () {
+                    // Show dropdown menu for AI provider selection
+                    final RenderBox button =
+                        context.findRenderObject() as RenderBox;
+                    final RenderBox overlay =
+                        Overlay.of(context).context.findRenderObject()
+                            as RenderBox;
+                    final RelativeRect position = RelativeRect.fromRect(
+                      Rect.fromPoints(
+                        button.localToGlobal(Offset.zero, ancestor: overlay),
+                        button.localToGlobal(
+                          button.size.bottomRight(Offset.zero),
+                          ancestor: overlay,
+                        ),
+                      ),
+                      Offset.zero & overlay.size,
+                    );
+
+                    showMenu<Map<String, dynamic>>(
+                      context: context,
+                      position: position,
+                      items: _buildProviderMenuItems(),
+                    ).then((Map<String, dynamic>? item) {
+                      if (item != null) {
+                        final AIProvider provider = item['provider'];
+                        final String model = item['model'];
+                        chatProvider.updateChatProvider(provider, model);
+                      }
+                    });
+                  },
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _getProviderIcon(chatProvider.activeChat!.provider),
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          'AI Chat - ${chatProvider.activeChat?.title}',
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      const Icon(Icons.arrow_drop_down, size: 20),
+                    ],
+                  ),
+                )
+                : const Text('AI Chat'),
         leading: IconButton(
           icon: Icon(_showSidebar ? Icons.menu_open : Icons.menu),
           onPressed: _toggleSidebar,
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.history),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const ChatHistoryScreen()),
-              );
-            },
-            tooltip: 'Chat History',
-          ),
-          IconButton(
-            icon: Icon(themeProvider.isDarkMode
-                ? Icons.light_mode
-                : Icons.dark_mode),
+            icon: Icon(
+              themeProvider.isDarkMode ? Icons.light_mode : Icons.dark_mode,
+            ),
             onPressed: themeProvider.toggleTheme,
             tooltip: 'Toggle Theme',
           ),
           IconButton(
             icon: const Icon(Icons.settings),
             onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const SettingsScreen()),
-              );
+              if (widget.routeToSettings != null) {
+                widget.routeToSettings!();
+              } else {
+                // Fallback to direct navigation if router not provided
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const SettingsScreen(),
+                  ),
+                );
+              }
             },
             tooltip: 'Settings',
           ),
@@ -183,50 +253,176 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       body: Row(
         children: [
-          // Sidebar
+          // Sidebar with shadow
           if (_showSidebar)
             SizedBox(
               width: 280,
-              child: ChatSidebar(
-                onNewChat: _showNewChatDialog,
+              child: Material(
+                elevation: 4,
+                color: Theme.of(context).scaffoldBackgroundColor,
+                shadowColor: Theme.of(context).shadowColor.withOpacity(0.3),
+                child: ChatSidebar(
+                  onNewChat: _showNewChatDialog,
+                  onChatSelected: _setActiveChat,
+                  onChatHistoryPressed: widget.routeToChatHistory,
+                ),
               ),
             ),
-          // Main content
+
+          // Main content area with message input overlay
           Expanded(
-            child: Column(
+            child: Stack(
               children: [
-                // Messages list
-                Expanded(
-                  child: chatProvider.activeChat != null
-                      ? ChatMessageList(
-                          messages: chatProvider.activeChat!.messages,
-                        )
-                      : const Center(
-                          child: Text('No active chat. Create a new chat to start.'),
-                        ),
+                // Messages list with padding
+                Positioned.fill(
+                  child: Column(
+                    children: [
+                      Expanded(
+                        child:
+                            _isLoadingChat
+                                ? const Center(
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      CircularProgressIndicator(),
+                                      SizedBox(height: 16),
+                                      Text('Loading chat...'),
+                                    ],
+                                  ),
+                                )
+                                : chatProvider.activeChat != null
+                                ? Padding(
+                                  padding: const EdgeInsets.only(bottom: 80),
+                                  child: ChatMessageList(
+                                    messages: chatProvider.activeChat!.messages,
+                                  ),
+                                )
+                                : const Center(
+                                  child: Text(
+                                    'No active chat. Create a new chat to start.',
+                                  ),
+                                ),
+                      ),
+                    ],
+                  ),
                 ),
-                // Message input
-                if (chatProvider.activeChat != null)
-                  MessageInput(
-                    controller: _messageController,
-                    onSend: (message) {
-                      chatProvider.sendMessage(message);
-                      _messageController.clear();
-                    },
-                    isLoading: chatProvider.isLoading,
+
+                // Message input positioned at the bottom
+                if (chatProvider.activeChat != null && !_isLoadingChat)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: MessageInput(
+                      controller: _messageController,
+                      onSend: (message) {
+                        chatProvider.sendMessage(message);
+                        _messageController.clear();
+                      },
+                      isLoading: chatProvider.isLoading,
+                    ),
                   ),
               ],
             ),
           ),
         ],
       ),
-      //floatingActionButton: !_showSidebar
-      //    ? FloatingActionButton(
-      //        onPressed: _showNewChatDialog,
-      //        tooltip: 'New Chat',
-      //        child: const Icon(Icons.add),
-      //      )
-      //    : null,
     );
   }
-} 
+
+  // Helper function to get the icon for the current AI provider
+  Widget _getProviderIcon(AIProvider provider) {
+    IconData iconData;
+    Color iconColor;
+
+    switch (provider) {
+      case AIProvider.openai:
+        iconData = Icons.chat_bubble_outline;
+        iconColor = Colors.green;
+        break;
+      case AIProvider.anthropic:
+        iconData = Icons.psychology;
+        iconColor = Colors.purple;
+        break;
+      case AIProvider.gemini:
+        iconData = Icons.science;
+        iconColor = Colors.blue;
+        break;
+    }
+
+    return Icon(iconData, color: iconColor);
+  }
+
+  // Build menu items for AI providers
+  List<PopupMenuEntry<Map<String, dynamic>>> _buildProviderMenuItems() {
+    List<PopupMenuEntry<Map<String, dynamic>>> allItems = [];
+
+    // OpenAI models
+    allItems.add(
+      const PopupMenuItem<Map<String, dynamic>>(
+        enabled: false,
+        child: Text(
+          'OpenAI Models',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+      ),
+    );
+
+    allItems.addAll(
+      ChatProvider.openAIModels.entries
+          .map(
+            (entry) => PopupMenuItem<Map<String, dynamic>>(
+              value: {'provider': AIProvider.openai, 'model': entry.key},
+              child: Text(entry.value),
+            ),
+          )
+          .toList(),
+    );
+
+    // Anthropic models
+    allItems.add(
+      const PopupMenuItem<Map<String, dynamic>>(
+        enabled: false,
+        child: Text(
+          'Anthropic Models',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+      ),
+    );
+
+    allItems.addAll(
+      ChatProvider.anthropicModels.entries
+          .map(
+            (entry) => PopupMenuItem<Map<String, dynamic>>(
+              value: {'provider': AIProvider.anthropic, 'model': entry.key},
+              child: Text(entry.value),
+            ),
+          )
+          .toList(),
+    );
+
+    // Gemini models
+    allItems.add(
+      const PopupMenuItem<Map<String, dynamic>>(
+        enabled: false,
+        child: Text(
+          'Gemini Models',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+      ),
+    );
+
+    allItems.addAll(
+      ChatProvider.geminiModels.entries
+          .map(
+            (entry) => PopupMenuItem<Map<String, dynamic>>(
+              value: {'provider': AIProvider.gemini, 'model': entry.key},
+              child: Text(entry.value),
+            ),
+          )
+          .toList(),
+    );
+
+    return allItems;
+  }
+}

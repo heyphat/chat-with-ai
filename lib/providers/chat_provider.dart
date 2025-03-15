@@ -11,15 +11,28 @@ import '../services/gemini_service.dart';
 import 'dart:developer' as developer;
 
 class ChatProvider extends ChangeNotifier {
-  List<Chat> _chats = [];
+  // Metadata for all chats (lightweight)
+  List<ChatMetadata> _chatMetadata = [];
+
+  // Full chat data for active chat only (to reduce memory usage)
   Chat? _activeChat;
+
+  // Cache of loaded chats (for quick access to recently used chats)
+  final Map<String, Chat> _chatCache = {};
+
+  // Maximum number of chats to keep in memory cache
+  static const int _maxChatCacheSize = 5;
+
   bool _isLoading = false;
   final _uuid = const Uuid();
-  static const String _chatsKey = 'chats';
+
+  // Keys for storage
+  static const String _chatMetadataKey = 'chat_metadata';
+  static const String _chatDataPrefix = 'chat_data_';
   static const String _activeChatKey = 'activeChat';
-  static const String _chatIndexKey = 'chat_index';
-  static const int _maxChatHistory = 50; // Maximum number of chats to keep in history
-  
+  static const int _maxChatHistory =
+      50; // Maximum number of chats to keep in history
+
   // Add OpenAI model options
   static const Map<String, String> openAIModels = {
     'gpt-4o-mini': 'GPT-4o Mini',
@@ -45,22 +58,28 @@ class ChatProvider extends ChangeNotifier {
   };
 
   ChatProvider() {
-    _loadChatsFromPrefs();
+    _loadChatMetadataFromPrefs();
   }
 
   // Getters
-  List<Chat> get chats => _chats;
+  List<ChatMetadata> get chatMetadata => _chatMetadata;
   Chat? get activeChat => _activeChat;
   bool get isLoading => _isLoading;
 
+  // Helper method to sort metadata by most recent update
+  void _sortChatMetadata() {
+    _chatMetadata.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+  }
+
   // Create a new chat
-  Future<void> createChat(AIProvider provider, String model) async {
-    final modelName = provider == AIProvider.openai 
-        ? openAIModels[model] ?? model
-        : provider == AIProvider.anthropic
+  Future<String> createChat(AIProvider provider, String model) async {
+    final modelName =
+        provider == AIProvider.openai
+            ? openAIModels[model] ?? model
+            : provider == AIProvider.anthropic
             ? anthropicModels[model] ?? model
             : geminiModels[model] ?? model;
-            
+
     final newChat = Chat(
       id: _uuid.v4(),
       title: 'Chat with $modelName',
@@ -71,59 +90,187 @@ class ChatProvider extends ChangeNotifier {
       updatedAt: DateTime.now(),
     );
 
-    _chats.add(newChat);
+    // Create metadata
+    final metadata = ChatMetadata.fromChat(newChat);
+
+    // Update state
+    _chatMetadata.add(metadata);
+    _sortChatMetadata(); // Sort to ensure most recent is first
     _activeChat = newChat;
+    _chatCache[newChat.id] = newChat;
+
     notifyListeners();
-    await _saveChatsToPrefs();
+
+    // Save to storage
+    await _saveChatMetadataToPrefs();
+    await _saveChatToPrefs(newChat);
+
+    // Return the new chat ID so caller can use it
+    return newChat.id;
   }
 
   // Delete a chat
   Future<void> deleteChat(String chatId) async {
-    _chats.removeWhere((chat) => chat.id == chatId);
-    
+    // Remove from metadata
+    _chatMetadata.removeWhere((metadata) => metadata.id == chatId);
+
+    // Remove from cache
+    _chatCache.remove(chatId);
+
+    // Update active chat if needed
     if (_activeChat != null && _activeChat!.id == chatId) {
-      _activeChat = _chats.isNotEmpty ? _chats[0] : null;
+      if (_chatMetadata.isNotEmpty) {
+        await loadChatContent(_chatMetadata[0].id);
+      } else {
+        _activeChat = null;
+      }
     }
-    
+
     notifyListeners();
-    await _saveChatsToPrefs();
+
+    // Save state and remove chat data
+    await _saveChatMetadataToPrefs();
+
+    // Remove chat data from storage
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('$_chatDataPrefix$chatId');
   }
 
-  // Set active chat
+  // Set active chat - with lazy loading
   Future<void> setActiveChat(String chatId) async {
     try {
-      final chat = _chats.firstWhere((c) => c.id == chatId);
-      _activeChat = chat;
-      notifyListeners();
-      
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_activeChatKey, chatId);
+      // Check if requested chat is already active
+      if (_activeChat?.id == chatId) {
+        return; // Already active, nothing to do
+      }
+
+      // We no longer update the timestamp when selecting a chat
+      // Just load the chat content without changing updatedAt or resorting
+      await loadChatContent(chatId);
+
+      // Save active chat ID to preferences (in background)
+      SharedPreferences.getInstance().then((prefs) {
+        prefs.setString(_activeChatKey, chatId);
+      });
     } catch (e) {
       developer.log('Error setting active chat: $e');
-      if (_chats.isNotEmpty) {
-        _activeChat = _chats[0];
-        notifyListeners();
+      // Try to load first chat if available
+      if (_chatMetadata.isNotEmpty && _chatMetadata[0].id != chatId) {
+        await loadChatContent(_chatMetadata[0].id);
       }
+    }
+  }
+
+  // Load chat content (lazy loading)
+  Future<void> loadChatContent(String chatId) async {
+    try {
+      // Check if chat is in memory cache first
+      if (_chatCache.containsKey(chatId)) {
+        _activeChat = _chatCache[chatId];
+        notifyListeners();
+        return;
+      }
+
+      // Otherwise load from storage
+      final prefs = await SharedPreferences.getInstance();
+      final chatJson = prefs.getString('$_chatDataPrefix$chatId');
+
+      if (chatJson != null) {
+        final chat = Chat.fromJson(jsonDecode(chatJson));
+
+        // Update active chat
+        _activeChat = chat;
+
+        // Add to cache
+        _chatCache[chatId] = chat;
+
+        // Manage cache size
+        if (_chatCache.length > _maxChatCacheSize) {
+          // Remove oldest item from cache (not being viewed)
+          final keysToRemove =
+              _chatCache.keys.where((key) => key != _activeChat!.id).toList();
+
+          if (keysToRemove.isNotEmpty) {
+            _chatCache.remove(keysToRemove.first);
+          }
+        }
+
+        notifyListeners();
+      } else {
+        throw Exception('Chat not found: $chatId');
+      }
+    } catch (e) {
+      developer.log('Error loading chat content: $e');
+      rethrow;
     }
   }
 
   // Update chat title
   Future<void> updateChatTitle(String chatId, String newTitle) async {
-    final index = _chats.indexWhere((chat) => chat.id == chatId);
-    if (index != -1) {
-      final updatedChat = _chats[index].copyWith(
+    // Update metadata
+    final metadataIndex = _chatMetadata.indexWhere(
+      (metadata) => metadata.id == chatId,
+    );
+    if (metadataIndex != -1) {
+      final updatedMetadata = ChatMetadata(
+        id: _chatMetadata[metadataIndex].id,
+        title: newTitle,
+        messageCount: _chatMetadata[metadataIndex].messageCount,
+        provider: _chatMetadata[metadataIndex].provider,
+        model: _chatMetadata[metadataIndex].model,
+        createdAt: _chatMetadata[metadataIndex].createdAt,
+        updatedAt: DateTime.now(),
+        lastMessagePreview: _chatMetadata[metadataIndex].lastMessagePreview,
+      );
+
+      _chatMetadata[metadataIndex] = updatedMetadata;
+      _sortChatMetadata(); // Sort to move this chat to the top
+    }
+
+    // Update active chat if needed
+    if (_activeChat?.id == chatId) {
+      final updatedChat = _activeChat!.copyWith(
         title: newTitle,
         updatedAt: DateTime.now(),
       );
-      _chats[index] = updatedChat;
-      
-      if (_activeChat?.id == chatId) {
-        _activeChat = updatedChat;
+
+      _activeChat = updatedChat;
+
+      // Update cache
+      _chatCache[chatId] = updatedChat;
+
+      // Save chat data
+      await _saveChatToPrefs(updatedChat);
+    } else if (_chatCache.containsKey(chatId)) {
+      // Update cached chat
+      final cachedChat = _chatCache[chatId]!;
+      final updatedChat = cachedChat.copyWith(
+        title: newTitle,
+        updatedAt: DateTime.now(),
+      );
+
+      _chatCache[chatId] = updatedChat;
+
+      // Save chat data
+      await _saveChatToPrefs(updatedChat);
+    } else {
+      // Load, update and save chat
+      final prefs = await SharedPreferences.getInstance();
+      final chatJson = prefs.getString('$_chatDataPrefix$chatId');
+
+      if (chatJson != null) {
+        final chat = Chat.fromJson(jsonDecode(chatJson));
+        final updatedChat = chat.copyWith(
+          title: newTitle,
+          updatedAt: DateTime.now(),
+        );
+
+        await _saveChatToPrefs(updatedChat);
       }
-      
-      notifyListeners();
-      await _saveChatsToPrefs();
     }
+
+    notifyListeners();
+    await _saveChatMetadataToPrefs();
   }
 
   // Send a message to the AI and get a streamed response
@@ -160,15 +307,25 @@ class ChatProvider extends ChangeNotifier {
       updatedAt: DateTime.now(),
     );
 
-    // Update state
-    final chatIndex = _chats.indexWhere((chat) => chat.id == _activeChat!.id);
-    _chats[chatIndex] = updatedChat;
+    // Update state and cache
     _activeChat = updatedChat;
+    _chatCache[updatedChat.id] = updatedChat;
     _isLoading = true;
+
+    // Update metadata
+    final metadataIndex = _chatMetadata.indexWhere(
+      (metadata) => metadata.id == updatedChat.id,
+    );
+    if (metadataIndex != -1) {
+      _chatMetadata[metadataIndex] = ChatMetadata.fromChat(updatedChat);
+      _sortChatMetadata(); // Sort to ensure most recent is first
+    }
+
     notifyListeners();
-    
+
     // Save initial state but don't await to avoid blocking the stream
-    _saveChatsToPrefs();
+    _saveChatToPrefs(updatedChat);
+    _saveChatMetadataToPrefs();
 
     // Get AI service based on provider
     final aiService = _getAIService(_activeChat!.provider);
@@ -176,93 +333,105 @@ class ChatProvider extends ChangeNotifier {
     try {
       // Create a variable to accumulate the streamed response
       String responseContent = '';
-      
+
       // Start the stream
       final stream = aiService.getCompletionStream(
-        _activeChat!.messages.where((msg) => msg.id != assistantMessage.id).toList(),
+        _activeChat!.messages
+            .where((msg) => msg.id != assistantMessage.id)
+            .toList(),
         _activeChat!.model,
       );
-      
+
       // Listen to the stream and update the message content
       await for (String chunk in stream) {
         responseContent += chunk;
-        
+
         // Update the assistant message with the accumulated content
         final updatedAssistantMessage = assistantMessage.copyWith(
           content: responseContent,
           isLoading: true,
         );
-        
-        // Find the latest state of active chat to avoid stale updates
-        final currentChatIndex = _chats.indexWhere((chat) => chat.id == _activeChat!.id);
-        final currentChat = _chats[currentChatIndex];
-        
+
+        // Get the current state of active chat
+        final currentChat = _activeChat!;
+
         // Update messages, preserving all other messages
-        final streamingMessages = currentChat.messages.map((msg) {
-          if (msg.id == assistantMessage.id) {
-            return updatedAssistantMessage;
-          }
-          return msg;
-        }).toList();
-        
+        final streamingMessages =
+            currentChat.messages.map((msg) {
+              if (msg.id == assistantMessage.id) {
+                return updatedAssistantMessage;
+              }
+              return msg;
+            }).toList();
+
         // Update active chat
         final streamingChat = currentChat.copyWith(
           messages: streamingMessages,
           updatedAt: DateTime.now(),
         );
-        
-        // Update state
-        _chats[currentChatIndex] = streamingChat;
+
+        // Update state and cache
         _activeChat = streamingChat;
-        
+        _chatCache[streamingChat.id] = streamingChat;
+
         // Notify listeners immediately to update UI
         notifyListeners();
-        
+
         // Small delay to allow UI to update (use microtask instead of actual delay to avoid blocking)
         await Future.microtask(() => {});
       }
-      
+
       // Final update with completed state
       final finalAssistantMessage = assistantMessage.copyWith(
         content: responseContent,
         isLoading: false,
       );
-      
-      // Find the latest state again
-      final finalChatIndex = _chats.indexWhere((chat) => chat.id == _activeChat!.id);
-      final finalCurrentChat = _chats[finalChatIndex];
-      
+
+      // Get the current state of active chat
+      final finalCurrentChat = _activeChat!;
+
       // Update messages
-      final finalMessages = finalCurrentChat.messages.map((msg) {
-        if (msg.id == assistantMessage.id) {
-          return finalAssistantMessage;
-        }
-        return msg;
-      }).toList();
-      
+      final finalMessages =
+          finalCurrentChat.messages.map((msg) {
+            if (msg.id == assistantMessage.id) {
+              return finalAssistantMessage;
+            }
+            return msg;
+          }).toList();
+
       // Update active chat
       final finalChat = finalCurrentChat.copyWith(
         messages: finalMessages,
         updatedAt: DateTime.now(),
       );
-      
-      // Update state
-      _chats[finalChatIndex] = finalChat;
+
+      // Update state and cache
       _activeChat = finalChat;
+      _chatCache[finalChat.id] = finalChat;
       _isLoading = false;
+
+      // Update metadata with new message preview
+      final finalMetadataIndex = _chatMetadata.indexWhere(
+        (metadata) => metadata.id == finalChat.id,
+      );
+      if (finalMetadataIndex != -1) {
+        _chatMetadata[finalMetadataIndex] = ChatMetadata.fromChat(finalChat);
+        _sortChatMetadata(); // Sort to ensure most recent is first
+      }
+
       notifyListeners();
-      
+
       // Save the final state
-      await _saveChatsToPrefs();
-      
+      await _saveChatToPrefs(finalChat);
+      await _saveChatMetadataToPrefs();
+
       // If this is the first message exchange, generate a title
       if (finalMessages.length == 2) {
         await generateChatTitle();
       }
-      
     } catch (e) {
       developer.log('Error during AI streaming: $e');
-      
+
       // Create error message
       final errorMessage = assistantMessage.copyWith(
         content: 'Error: Failed to get response from AI: ${e.toString()}',
@@ -270,17 +439,17 @@ class ChatProvider extends ChangeNotifier {
         error: e.toString(),
       );
 
-      // Find the latest state
-      final errorChatIndex = _chats.indexWhere((chat) => chat.id == _activeChat!.id);
-      final errorCurrentChat = _chats[errorChatIndex];
-      
+      // Get the current state of active chat
+      final errorCurrentChat = _activeChat!;
+
       // Update messages
-      final errorMessages = errorCurrentChat.messages.map((msg) {
-        if (msg.id == assistantMessage.id) {
-          return errorMessage;
-        }
-        return msg;
-      }).toList();
+      final errorMessages =
+          errorCurrentChat.messages.map((msg) {
+            if (msg.id == assistantMessage.id) {
+              return errorMessage;
+            }
+            return msg;
+          }).toList();
 
       // Update active chat
       final errorChat = errorCurrentChat.copyWith(
@@ -288,46 +457,58 @@ class ChatProvider extends ChangeNotifier {
         updatedAt: DateTime.now(),
       );
 
-      // Update state
-      _chats[errorChatIndex] = errorChat;
+      // Update state and cache
       _activeChat = errorChat;
+      _chatCache[errorChat.id] = errorChat;
       _isLoading = false;
+
+      // Update metadata
+      final errorMetadataIndex = _chatMetadata.indexWhere(
+        (metadata) => metadata.id == errorChat.id,
+      );
+      if (errorMetadataIndex != -1) {
+        _chatMetadata[errorMetadataIndex] = ChatMetadata.fromChat(errorChat);
+        _sortChatMetadata(); // Sort to ensure most recent is first
+      }
+
       notifyListeners();
-      
+
       // Save the error state
-      await _saveChatsToPrefs();
+      await _saveChatToPrefs(errorChat);
+      await _saveChatMetadataToPrefs();
     }
   }
 
   // Generate a title for the chat using the AI service
   Future<void> generateChatTitle() async {
     if (_activeChat == null) return;
-    
+
     try {
       // Get AI service based on provider
       final aiService = _getAIService(_activeChat!.provider);
-      
+
       // Create a title request message
       final titleRequestMessage = Message(
         id: _uuid.v4(),
-        content: 'What would be a short and relevant title for this chat? You must strictly answer with only the title, no other text is allowed. Do not include any quotation marks in your response.',
+        content:
+            'What would be a short and relevant title for this chat? You must strictly answer with only the title, no other text is allowed. Do not include any quotation marks in your response.',
         role: MessageRole.user,
         timestamp: DateTime.now(),
       );
-      
+
       // Use non-streaming version to get a single clean response
-      final title = await aiService.getCompletion(
-        [..._activeChat!.messages, titleRequestMessage],
-        _activeChat!.model,
-      );
-      
+      final title = await aiService.getCompletion([
+        ..._activeChat!.messages,
+        titleRequestMessage,
+      ], _activeChat!.model);
+
       // Clean any extra text that might have been included (should be just the title)
       // Also remove any quotes that might be in the response
       final cleanTitle = title.trim().replaceAll('"', '').replaceAll("'", '');
-      
+
       // Update the chat title
       await updateChatTitle(_activeChat!.id, cleanTitle);
-      
+
       developer.log('Generated chat title: $cleanTitle');
     } catch (e) {
       developer.log('Error generating chat title: $e');
@@ -338,16 +519,29 @@ class ChatProvider extends ChangeNotifier {
   // Clear chat history
   Future<void> clearChatHistory() async {
     try {
-      _chats = [];
+      // Get all chat IDs to remove individually
+      final chatIds = _chatMetadata.map((metadata) => metadata.id).toList();
+
+      // Clear in-memory data
+      _chatMetadata = [];
       _activeChat = null;
+      _chatCache.clear();
       _isLoading = false;
+
       notifyListeners();
-      
+
+      // Clear storage
       final prefs = await SharedPreferences.getInstance();
-      await prefs.remove(_chatsKey);
+
+      // Remove metadata
+      await prefs.remove(_chatMetadataKey);
       await prefs.remove(_activeChatKey);
-      await prefs.remove(_chatIndexKey);
-      
+
+      // Remove individual chat data
+      for (final chatId in chatIds) {
+        await prefs.remove('$_chatDataPrefix$chatId');
+      }
+
       developer.log('Chat history cleared successfully');
     } catch (e) {
       developer.log('Error clearing chat history: $e');
@@ -355,14 +549,32 @@ class ChatProvider extends ChangeNotifier {
   }
 
   // Export chat history as JSON string
-  String exportChatHistory() {
+  Future<String> exportChatHistory() async {
     try {
+      // Load all chats before exporting
+      final allChats = <Chat>[];
+
+      for (final metadata in _chatMetadata) {
+        if (_chatCache.containsKey(metadata.id)) {
+          // Use cached version
+          allChats.add(_chatCache[metadata.id]!);
+        } else {
+          // Load from storage
+          final prefs = await SharedPreferences.getInstance();
+          final chatJson = prefs.getString('$_chatDataPrefix${metadata.id}');
+
+          if (chatJson != null) {
+            allChats.add(Chat.fromJson(jsonDecode(chatJson)));
+          }
+        }
+      }
+
       final exportData = {
-        'chats': _chats.map((chat) => chat.toJson()).toList(),
+        'chats': allChats.map((chat) => chat.toJson()).toList(),
         'activeChat': _activeChat?.id,
         'exportDate': DateTime.now().toIso8601String(),
       };
-      
+
       return jsonEncode(exportData);
     } catch (e) {
       developer.log('Error exporting chat history: $e');
@@ -374,26 +586,49 @@ class ChatProvider extends ChangeNotifier {
   Future<bool> importChatHistory(String jsonData) async {
     try {
       final importData = jsonDecode(jsonData);
-      
-      final chatsList = (importData['chats'] as List)
-          .map((chatJson) => Chat.fromJson(chatJson))
-          .toList();
-          
+
+      final chats =
+          (importData['chats'] as List)
+              .map((chatJson) => Chat.fromJson(chatJson))
+              .toList();
+
       final activeChatId = importData['activeChat'] as String?;
-      
-      _chats = chatsList;
-      
-      if (activeChatId != null && _chats.any((chat) => chat.id == activeChatId)) {
-        _activeChat = _chats.firstWhere((chat) => chat.id == activeChatId);
-      } else if (_chats.isNotEmpty) {
-        _activeChat = _chats[0];
+
+      // Clear existing data
+      await clearChatHistory();
+
+      // Create metadata for each chat
+      _chatMetadata = chats.map((chat) => ChatMetadata.fromChat(chat)).toList();
+
+      // Save each chat individually
+      for (final chat in chats) {
+        await _saveChatToPrefs(chat);
+      }
+
+      // Set active chat
+      if (activeChatId != null &&
+          chats.any((chat) => chat.id == activeChatId)) {
+        final activeChat = chats.firstWhere((chat) => chat.id == activeChatId);
+        _activeChat = activeChat;
+        _chatCache[activeChat.id] = activeChat;
+      } else if (chats.isNotEmpty) {
+        _activeChat = chats[0];
+        _chatCache[chats[0].id] = chats[0];
       } else {
         _activeChat = null;
       }
-      
+
+      // Save metadata
+      await _saveChatMetadataToPrefs();
+
+      // Save active chat id
+      if (_activeChat != null) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(_activeChatKey, _activeChat!.id);
+      }
+
       notifyListeners();
-      await _saveChatsToPrefs();
-      
+
       developer.log('Chat history imported successfully');
       return true;
     } catch (e) {
@@ -414,133 +649,123 @@ class ChatProvider extends ChangeNotifier {
     }
   }
 
-  // Load chats from SharedPreferences with chunking for large histories
-  Future<void> _loadChatsFromPrefs() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      
-      // First check if we have chat data stored in individual chunks
-      final chatCount = prefs.getInt(_chatIndexKey) ?? 0;
-      
-      if (chatCount > 0) {
-        // Load chats from individual chunks
-        _chats = [];
-        for (int i = 0; i < chatCount; i++) {
-          final chatJson = prefs.getString('${_chatsKey}_$i');
-          if (chatJson != null) {
-            try {
-              final chat = Chat.fromJson(jsonDecode(chatJson));
-              _chats.add(chat);
-            } catch (e) {
-              developer.log('Error parsing chat ${i + 1}: $e');
-              // Continue loading other chats even if one fails
-            }
-          }
-        }
-        
-        // Sort chats by most recent update
-        _chats.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
-      } else {
-        // Try loading from legacy storage (all chats in one list)
-        final chatsJson = prefs.getStringList(_chatsKey);
-        if (chatsJson != null && chatsJson.isNotEmpty) {
-          _chats = [];
-          for (final json in chatsJson) {
-            try {
-              final chat = Chat.fromJson(jsonDecode(json));
-              _chats.add(chat);
-            } catch (e) {
-              developer.log('Error parsing chat: $e');
-              // Continue loading other chats
-            }
-          }
-          
-          // Migrate to new chunked storage format
-          await _saveChatsToPrefs();
-        }
-      }
-      
-      // Load active chat
-      final activeChatId = prefs.getString(_activeChatKey);
-      if (activeChatId != null && _chats.isNotEmpty) {
-        try {
-          _activeChat = _chats.firstWhere(
-            (chat) => chat.id == activeChatId,
-            orElse: () => _chats[0],
-          );
-        } catch (e) {
-          developer.log('Error finding active chat: $e');
-          if (_chats.isNotEmpty) {
-            _activeChat = _chats[0];
-          }
-        }
-      } else if (_chats.isNotEmpty) {
-        _activeChat = _chats[0];
-      }
-      
-      developer.log('Loaded ${_chats.length} chats from storage');
-      notifyListeners();
-    } catch (e) {
-      developer.log('Error loading chats: $e');
-      // Initialize with empty state if loading fails
-      _chats = [];
-      _activeChat = null;
-    }
-  }
+  // Update active chat provider and model
+  Future<void> updateChatProvider(
+    AIProvider newProvider,
+    String newModel,
+  ) async {
+    if (_activeChat == null) return;
 
-  // Create a default chat if none exists
-  Chat _createDefaultChat() {
-    final defaultModel = openAIModels.keys.first;
-    final modelName = openAIModels[defaultModel] ?? defaultModel;
-    
-    return Chat(
-      id: _uuid.v4(),
-      title: 'Chat with $modelName',
-      messages: [],
-      provider: AIProvider.openai,
-      model: defaultModel,
-      createdAt: DateTime.now(),
+    // // Get the model display name
+    // final modelName =
+    //     newProvider == AIProvider.openai
+    //         ? openAIModels[newModel] ?? newModel
+    //         : newProvider == AIProvider.anthropic
+    //         ? anthropicModels[newModel] ?? newModel
+    //         : geminiModels[newModel] ?? newModel;
+
+    // Update active chat with new provider and model
+    final updatedChat = _activeChat!.copyWith(
+      provider: newProvider,
+      model: newModel,
       updatedAt: DateTime.now(),
+    );
+
+    // Update state and cache
+    _activeChat = updatedChat;
+    _chatCache[updatedChat.id] = updatedChat;
+
+    // Update metadata
+    final metadataIndex = _chatMetadata.indexWhere(
+      (metadata) => metadata.id == updatedChat.id,
+    );
+    if (metadataIndex != -1) {
+      _chatMetadata[metadataIndex] = ChatMetadata.fromChat(updatedChat);
+      _sortChatMetadata(); // Sort to ensure most recent is first
+    }
+
+    notifyListeners();
+
+    // Save to storage
+    await _saveChatToPrefs(updatedChat);
+    await _saveChatMetadataToPrefs();
+
+    developer.log(
+      'Updated chat provider to ${newProvider.name} with model $newModel',
     );
   }
 
-  // Save chats to SharedPreferences using chunking for better performance
-  Future<void> _saveChatsToPrefs() async {
+  // Load chat metadata from SharedPreferences
+  Future<void> _loadChatMetadataFromPrefs() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      
-      // Limit number of chats to prevent storage issues
-      if (_chats.length > _maxChatHistory) {
-        // Keep most recently updated chats
-        _chats.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
-        _chats = _chats.sublist(0, _maxChatHistory);
+
+      // Load metadata
+      final metadataJson = prefs.getString(_chatMetadataKey);
+
+      if (metadataJson != null) {
+        final List<dynamic> metadataList = jsonDecode(metadataJson);
+        _chatMetadata =
+            metadataList.map((json) => ChatMetadata.fromJson(json)).toList();
+
+        // Sort by most recent
+        _sortChatMetadata();
       }
-      
-      // Clear previous chat data
-      final previousCount = prefs.getInt(_chatIndexKey) ?? 0;
-      for (int i = 0; i < previousCount; i++) {
-        await prefs.remove('${_chatsKey}_$i');
+
+      // Load active chat ID
+      final activeChatId = prefs.getString(_activeChatKey);
+
+      if (activeChatId != null &&
+          _chatMetadata.any((m) => m.id == activeChatId)) {
+        // Load the active chat
+        await loadChatContent(activeChatId);
+      } else if (_chatMetadata.isNotEmpty) {
+        // Load the first chat as active (which will be the most recent due to sorting)
+        await loadChatContent(_chatMetadata[0].id);
       }
-      
-      // Store each chat as a separate item to avoid size limits
-      for (int i = 0; i < _chats.length; i++) {
-        final chatJson = jsonEncode(_chats[i].toJson());
-        await prefs.setString('${_chatsKey}_$i', chatJson);
-      }
-      
-      // Save the count of chats
-      await prefs.setInt(_chatIndexKey, _chats.length);
-      
-      // Save active chat ID
-      if (_activeChat != null) {
-        await prefs.setString(_activeChatKey, _activeChat!.id);
-      } else {
-        await prefs.remove(_activeChatKey);
-      }
-      
-      developer.log('Saved ${_chats.length} chats to storage');
+
+      notifyListeners();
+      developer.log('Loaded ${_chatMetadata.length} chat metadata items');
     } catch (e) {
-      developer.log('Error saving chats: $e');
+      developer.log('Error loading chat metadata: $e');
+      _chatMetadata = [];
+      _activeChat = null;
+      notifyListeners();
     }
   }
-} 
+
+  // Save chat metadata to SharedPreferences
+  Future<void> _saveChatMetadataToPrefs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+
+      // Limit number of chats
+      if (_chatMetadata.length > _maxChatHistory) {
+        _chatMetadata.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+        _chatMetadata = _chatMetadata.sublist(0, _maxChatHistory);
+      }
+
+      // Convert to JSON
+      final metadataList = _chatMetadata.map((m) => m.toJson()).toList();
+      final metadataJson = jsonEncode(metadataList);
+
+      // Save to storage
+      await prefs.setString(_chatMetadataKey, metadataJson);
+
+      developer.log('Saved ${_chatMetadata.length} chat metadata items');
+    } catch (e) {
+      developer.log('Error saving chat metadata: $e');
+    }
+  }
+
+  // Save individual chat to SharedPreferences
+  Future<void> _saveChatToPrefs(Chat chat) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final chatJson = jsonEncode(chat.toJson());
+      await prefs.setString('$_chatDataPrefix${chat.id}', chatJson);
+    } catch (e) {
+      developer.log('Error saving chat ${chat.id}: $e');
+    }
+  }
+}
