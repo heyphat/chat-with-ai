@@ -274,7 +274,7 @@ class ChatProvider extends ChangeNotifier {
   }
 
   // Send a message to the AI and get a streamed response
-  Future<void> sendMessage(String content) async {
+  Future<void> sendMessage(String content, {bool isRetry = false}) async {
     if (_activeChat == null) return;
 
     // Create a user message
@@ -321,6 +321,7 @@ class ChatProvider extends ChangeNotifier {
       _sortChatMetadata(); // Sort to ensure most recent is first
     }
 
+    // Notify UI once initially to show the messages
     notifyListeners();
 
     // Save initial state but don't await to avoid blocking the stream
@@ -334,6 +335,9 @@ class ChatProvider extends ChangeNotifier {
       // Create a variable to accumulate the streamed response
       String responseContent = '';
 
+      // Tracking the last time we updated the UI
+      var lastUIUpdate = DateTime.now();
+
       // Start the stream
       final stream = aiService.getCompletionStream(
         _activeChat!.messages
@@ -346,136 +350,176 @@ class ChatProvider extends ChangeNotifier {
       await for (String chunk in stream) {
         responseContent += chunk;
 
-        // Update the assistant message with the accumulated content
-        final updatedAssistantMessage = assistantMessage.copyWith(
-          content: responseContent,
-          isLoading: true,
-        );
+        // Find the message in the current chat state
+        if (_activeChat != null) {
+          final index = _activeChat!.messages.indexWhere(
+            (msg) => msg.id == assistantMessage.id,
+          );
 
-        // Get the current state of active chat
-        final currentChat = _activeChat!;
+          if (index != -1) {
+            // Create a new list with the updated message
+            final newMessages = List<Message>.from(_activeChat!.messages);
 
-        // Update messages, preserving all other messages
-        final streamingMessages =
-            currentChat.messages.map((msg) {
-              if (msg.id == assistantMessage.id) {
-                return updatedAssistantMessage;
-              }
-              return msg;
-            }).toList();
+            // Update the message content but KEEP loading state
+            newMessages[index] = newMessages[index].copyWith(
+              content: responseContent,
+              isLoading: true, // Important: keep the loading indicator
+            );
 
-        // Update active chat
-        final streamingChat = currentChat.copyWith(
-          messages: streamingMessages,
-          updatedAt: DateTime.now(),
-        );
+            // Create an updated chat
+            final streamingChat = _activeChat!.copyWith(
+              messages: newMessages,
+              updatedAt: DateTime.now(),
+            );
 
-        // Update state and cache
-        _activeChat = streamingChat;
-        _chatCache[streamingChat.id] = streamingChat;
+            // Update in-memory state (don't await database)
+            _activeChat = streamingChat;
+            _chatCache[streamingChat.id] = streamingChat;
 
-        // Notify listeners immediately to update UI
-        notifyListeners();
+            // Throttle UI updates to reduce flickering (update every 50-100ms)
+            final now = DateTime.now();
+            if (now.difference(lastUIUpdate).inMilliseconds > 50) {
+              notifyListeners();
+              lastUIUpdate = now;
 
-        // Small delay to allow UI to update (use microtask instead of actual delay to avoid blocking)
-        await Future.microtask(() => {});
-      }
-
-      // Final update with completed state
-      final finalAssistantMessage = assistantMessage.copyWith(
-        content: responseContent,
-        isLoading: false,
-      );
-
-      // Get the current state of active chat
-      final finalCurrentChat = _activeChat!;
-
-      // Update messages
-      final finalMessages =
-          finalCurrentChat.messages.map((msg) {
-            if (msg.id == assistantMessage.id) {
-              return finalAssistantMessage;
+              // Fire and forget database save to avoid blocking
+              _saveChatToPrefs(streamingChat).catchError((e) {
+                developer.log('Non-critical error saving streaming state: $e');
+              });
             }
-            return msg;
-          }).toList();
-
-      // Update active chat
-      final finalChat = finalCurrentChat.copyWith(
-        messages: finalMessages,
-        updatedAt: DateTime.now(),
-      );
-
-      // Update state and cache
-      _activeChat = finalChat;
-      _chatCache[finalChat.id] = finalChat;
-      _isLoading = false;
-
-      // Update metadata with new message preview
-      final finalMetadataIndex = _chatMetadata.indexWhere(
-        (metadata) => metadata.id == finalChat.id,
-      );
-      if (finalMetadataIndex != -1) {
-        _chatMetadata[finalMetadataIndex] = ChatMetadata.fromChat(finalChat);
-        _sortChatMetadata(); // Sort to ensure most recent is first
+          }
+        }
       }
 
-      notifyListeners();
+      // After the stream completes, get the token usage
+      final tokenUsage = await aiService.getLastStreamTokenUsage();
 
-      // Save the final state
-      await _saveChatToPrefs(finalChat);
-      await _saveChatMetadataToPrefs();
+      // Log token usage for debugging
+      if (tokenUsage != null) {
+        developer.log(
+          'Token usage received from AI service: '
+          'promptTokens=${tokenUsage.promptTokens}, '
+          'completionTokens=${tokenUsage.completionTokens}, '
+          'totalTokens=${tokenUsage.totalTokens}',
+        );
+      } else {
+        developer.log('No token usage information received from AI service');
+      }
 
-      // If this is the first message exchange, generate a title
-      if (finalMessages.length == 2) {
-        await generateChatTitle();
+      // Find the message in the current chat state again
+      // (chat state might have changed during streaming)
+      if (_activeChat != null) {
+        final index = _activeChat!.messages.indexWhere(
+          (msg) => msg.id == assistantMessage.id,
+        );
+
+        if (index != -1) {
+          // Create a new list with the completed message
+          final finalMessages = List<Message>.from(_activeChat!.messages);
+
+          // Update the message as complete with token usage
+          final completedMessage = finalMessages[index].copyWith(
+            content: responseContent,
+            isLoading: false, // Mark as not loading
+            tokenUsage: tokenUsage, // Set token usage information
+          );
+
+          // Replace the message in the list
+          finalMessages[index] = completedMessage;
+
+          // Create a final chat state
+          final finalChat = _activeChat!.copyWith(
+            messages: finalMessages,
+            updatedAt: DateTime.now(),
+          );
+
+          // Update all state
+          _activeChat = finalChat;
+          _chatCache[finalChat.id] = finalChat;
+          _isLoading = false;
+
+          // Update metadata
+          final finalMetadataIndex = _chatMetadata.indexWhere(
+            (metadata) => metadata.id == finalChat.id,
+          );
+
+          if (finalMetadataIndex != -1) {
+            _chatMetadata[finalMetadataIndex] = ChatMetadata.fromChat(
+              finalChat,
+            );
+            _sortChatMetadata();
+          }
+
+          // Ensure UI refreshes with completed message and token usage
+          notifyListeners();
+
+          // Log the update for debugging
+          developer.log(
+            'Updated message with token usage: ${tokenUsage != null}',
+          );
+
+          // Save the final state to database
+          await _saveChatToPrefs(finalChat);
+          await _saveChatMetadataToPrefs();
+
+          // Generate a title if this is the first message exchange
+          if (finalChat.messages.length == 2) {
+            await generateChatTitle();
+          }
+        }
       }
     } catch (e) {
       developer.log('Error during AI streaming: $e');
 
-      // Create error message
+      // Create error message with the error information
       final errorMessage = assistantMessage.copyWith(
         content: 'Error: Failed to get response from AI: ${e.toString()}',
         isLoading: false,
         error: e.toString(),
       );
 
-      // Get the current state of active chat
-      final errorCurrentChat = _activeChat!;
+      // Update the error state if active chat still exists
+      if (_activeChat != null) {
+        final index = _activeChat!.messages.indexWhere(
+          (msg) => msg.id == assistantMessage.id,
+        );
 
-      // Update messages
-      final errorMessages =
-          errorCurrentChat.messages.map((msg) {
-            if (msg.id == assistantMessage.id) {
-              return errorMessage;
-            }
-            return msg;
-          }).toList();
+        if (index != -1) {
+          // Create a new messages list with the error message
+          final errorMessages = List<Message>.from(_activeChat!.messages);
+          errorMessages[index] = errorMessage;
 
-      // Update active chat
-      final errorChat = errorCurrentChat.copyWith(
-        messages: errorMessages,
-        updatedAt: DateTime.now(),
-      );
+          // Create an error chat state
+          final errorChat = _activeChat!.copyWith(
+            messages: errorMessages,
+            updatedAt: DateTime.now(),
+          );
 
-      // Update state and cache
-      _activeChat = errorChat;
-      _chatCache[errorChat.id] = errorChat;
-      _isLoading = false;
+          // Update state
+          _activeChat = errorChat;
+          _chatCache[errorChat.id] = errorChat;
+          _isLoading = false;
 
-      // Update metadata
-      final errorMetadataIndex = _chatMetadata.indexWhere(
-        (metadata) => metadata.id == errorChat.id,
-      );
-      if (errorMetadataIndex != -1) {
-        _chatMetadata[errorMetadataIndex] = ChatMetadata.fromChat(errorChat);
-        _sortChatMetadata(); // Sort to ensure most recent is first
+          // Update metadata
+          final errorMetadataIndex = _chatMetadata.indexWhere(
+            (metadata) => metadata.id == errorChat.id,
+          );
+
+          if (errorMetadataIndex != -1) {
+            _chatMetadata[errorMetadataIndex] = ChatMetadata.fromChat(
+              errorChat,
+            );
+            _sortChatMetadata();
+          }
+
+          // Notify UI of error state
+          notifyListeners();
+
+          // Save the error state
+          await _saveChatToPrefs(errorChat);
+          await _saveChatMetadataToPrefs();
+        }
       }
-
-      notifyListeners();
-
-      // Save the error state
-      await _saveChatToPrefs(errorChat);
-      await _saveChatMetadataToPrefs();
     }
   }
 
@@ -497,22 +541,23 @@ class ChatProvider extends ChangeNotifier {
       );
 
       // Use non-streaming version to get a single clean response
-      final title = await aiService.getCompletion([
+      final (String titleText, _) = await aiService.getCompletion([
         ..._activeChat!.messages,
         titleRequestMessage,
       ], _activeChat!.model);
 
       // Clean any extra text that might have been included (should be just the title)
       // Also remove any quotes that might be in the response
-      final cleanTitle = title.trim().replaceAll('"', '').replaceAll("'", '');
+      final cleanTitle = titleText
+          .trim()
+          .replaceAll('"', '')
+          .replaceAll("'", '');
 
       // Update the chat title
       await updateChatTitle(_activeChat!.id, cleanTitle);
-
-      developer.log('Generated chat title: $cleanTitle');
     } catch (e) {
+      // Log error but don't interrupt the user experience
       developer.log('Error generating chat title: $e');
-      // Don't update the title if there's an error
     }
   }
 
@@ -766,6 +811,104 @@ class ChatProvider extends ChangeNotifier {
       await prefs.setString('$_chatDataPrefix${chat.id}', chatJson);
     } catch (e) {
       developer.log('Error saving chat ${chat.id}: $e');
+    }
+  }
+
+  // Update a message in the database with improved error handling
+  Future<void> _updateMessageInDb(Message message, String chatId) async {
+    try {
+      if (_activeChat == null) {
+        developer.log(
+          'Warning: Attempted to update message in DB but no active chat exists',
+        );
+        return;
+      }
+
+      if (_activeChat!.id != chatId) {
+        developer.log(
+          'Warning: Chat ID mismatch - active: ${_activeChat!.id}, requested: $chatId',
+        );
+        return;
+      }
+
+      // Get the current chat
+      final chat = _activeChat!;
+
+      // Check if the message exists in the chat
+      final messageExists = chat.messages.any((msg) => msg.id == message.id);
+      if (!messageExists) {
+        developer.log(
+          'Warning: Message ${message.id} not found in chat $chatId',
+        );
+        return;
+      }
+
+      // Update the message in the chat
+      final updatedMessages =
+          chat.messages.map((msg) {
+            if (msg.id == message.id) {
+              return message;
+            }
+            return msg;
+          }).toList();
+
+      // Create updated chat
+      final updatedChat = chat.copyWith(
+        messages: updatedMessages,
+        updatedAt: DateTime.now(),
+      );
+
+      // Save to database
+      await _saveChatToPrefs(updatedChat);
+
+      // Don't update the in-memory representation here,
+      // that should be handled separately via _updateMessageInMemory
+      // This prevents race conditions between DB and memory operations
+    } catch (e) {
+      developer.log('Error updating message in database: $e');
+      // Re-throw the error so caller can handle it if needed
+      rethrow;
+    }
+  }
+
+  // Update a message in memory with better error handling and synchronization
+  void _updateMessageInMemory(Message message) {
+    if (_activeChat == null) {
+      developer.log(
+        'Warning: Attempted to update message but no active chat exists',
+      );
+      return;
+    }
+
+    try {
+      // Find the message in the active chat
+      final index = _activeChat!.messages.indexWhere(
+        (msg) => msg.id == message.id,
+      );
+
+      if (index == -1) {
+        developer.log(
+          'Warning: Message with ID ${message.id} not found in active chat',
+        );
+        return;
+      }
+
+      // Create a new list with the updated message
+      final List<Message> updatedMessages = List.from(_activeChat!.messages);
+      updatedMessages[index] = message;
+
+      // Update the active chat
+      final updatedChat = _activeChat!.copyWith(
+        messages: updatedMessages,
+        updatedAt: DateTime.now(),
+      );
+
+      // Update state
+      _activeChat = updatedChat;
+      _chatCache[_activeChat!.id] = _activeChat!;
+    } catch (e) {
+      // Log any errors but don't crash
+      developer.log('Error updating message in memory: $e');
     }
   }
 }

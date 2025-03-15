@@ -21,8 +21,12 @@ class BrowserUrlManager {
     // Sanitize the URL to prevent duplication in path and hash
     url = _sanitizeUrl(url);
 
-    // Don't update if it's the same URL or if we're currently in an update
-    if (_lastSetUrl == url || _isUpdating) {
+    // Get the current URL to compare
+    final currentUrl = getCurrentPath();
+
+    // Don't update if it's the same URL (added more robust comparison)
+    if (currentUrl == url || _lastSetUrl == url || _isUpdating) {
+      print('URL update skipped - same URL or already updating: $url');
       return;
     }
 
@@ -89,6 +93,44 @@ class BrowserUrlManager {
     } catch (e) {
       print('Error preserving URL state: $e');
     }
+  }
+
+  /// Explicitly preserves a specific chat ID in browser state
+  /// This is used when navigating to settings while a chat is selected
+  static void preserveChatIdState(String chatId) {
+    if (!kIsWeb) return;
+
+    try {
+      // Store the chat ID in browser history state
+      js.context.callMethod('eval', [
+        "window.history.replaceState({'chatId': '$chatId'}, '', window.location.pathname);",
+      ]);
+      print('Stored chat ID $chatId in browser history state');
+    } catch (e) {
+      print('Error preserving chat ID state: $e');
+    }
+  }
+
+  /// Retrieves a chat ID from the browser history state if available
+  /// Returns null if no chat ID is found in the state
+  static String? getStoredChatId() {
+    if (!kIsWeb) return null;
+
+    try {
+      // Attempt to get chat ID from state
+      final dynamic state = js.context.callMethod('eval', [
+        "window.history.state && window.history.state.chatId ? window.history.state.chatId : null",
+      ]);
+
+      if (state != null) {
+        final String chatId = state.toString();
+        print('Retrieved stored chat ID from browser state: $chatId');
+        return chatId;
+      }
+    } catch (e) {
+      print('Error getting stored chat ID: $e');
+    }
+    return null;
   }
 
   /// Sanitize URL to prevent duplication in path and hash

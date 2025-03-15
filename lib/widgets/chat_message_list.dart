@@ -474,19 +474,10 @@ class MessageBubble extends StatelessWidget {
                                     child: Row(
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
-                                        Icon(
-                                          Icons.token,
-                                          size: 8.0,
-                                          color: Theme.of(context)
-                                              .colorScheme
-                                              .onSurfaceVariant
-                                              .withOpacity(0.9),
-                                        ),
-                                        const SizedBox(width: 2.0),
                                         Text(
                                           '${message.tokenUsage!.totalTokens ?? '?'} tokens',
                                           style: TextStyle(
-                                            fontSize: 8.0,
+                                            fontSize: 10.0,
                                             fontFamily: 'monospace',
                                             color: Theme.of(context)
                                                 .colorScheme

@@ -103,7 +103,13 @@ class AppRouter extends RouterDelegate<RouteConfiguration>
 
   // Navigate to a different route
   void navigateTo(String path) {
+    // First store the current data
+    final previousPath = _currentPath;
+    final previousChatId = _selectedChatId;
+
+    // Update the current path
     _currentPath = path;
+
     // Extract chatId if this is a chat detail route
     if (path.startsWith('/chats/') && path.length > 7) {
       _selectedChatId = path.substring(7);
@@ -111,8 +117,8 @@ class AppRouter extends RouterDelegate<RouteConfiguration>
         chatProvider.setActiveChat(_selectedChatId!);
       }
     } else {
-      // Only clear the chatId if we're not on a chat route
-      // But preserve it in memory if we're navigating to settings
+      // Only clear the chatId if we're not navigating to settings
+      // This preserves the chat id during settings navigation
       if (_currentPath != AppRoutes.settings) {
         _selectedChatId = null;
       }
@@ -123,11 +129,12 @@ class AppRouter extends RouterDelegate<RouteConfiguration>
       print('Router.navigateTo: Updating URL to $path');
 
       // If navigating to settings while having a chat selected, use our preservation method
-      if (_currentPath == AppRoutes.settings && _selectedChatId != null) {
-        // First navigate to settings, then restore the chat ID in the URL
+      if (_currentPath == AppRoutes.settings && previousChatId != null) {
+        // Store the chat ID in a URL state variable to preserve it
         BrowserUrlManager.updateUrl(path);
+        // Add a small delay to allow the URL update to complete
         Future.delayed(Duration(milliseconds: 50), () {
-          BrowserUrlManager.preserveUrlState();
+          BrowserUrlManager.preserveChatIdState(previousChatId);
         });
       } else {
         BrowserUrlManager.updateUrl(path);
@@ -160,8 +167,39 @@ class AppRouter extends RouterDelegate<RouteConfiguration>
   // Navigate back
   void pop() {
     if (_currentPath != AppRoutes.home) {
+      // First store the current path and chat ID
+      final previousPath = _currentPath;
+
+      // Set the path back to home
       _currentPath = AppRoutes.home;
-      _selectedChatId = null;
+
+      // If returning from settings, try to get the chat ID from browser state
+      if (previousPath == AppRoutes.settings && kIsWeb) {
+        final storedChatId = BrowserUrlManager.getStoredChatId();
+        if (storedChatId != null) {
+          // We found a stored chat ID, use it
+          _selectedChatId = storedChatId;
+          chatProvider.setActiveChat(storedChatId);
+        }
+      } else if (previousPath != AppRoutes.settings) {
+        // Clear selected chat ID if not returning from settings
+        _selectedChatId = null;
+      }
+
+      // Update browser URL if on web
+      if (kIsWeb) {
+        // If we have a chat ID and we're coming from settings,
+        // navigate back to the chat detail URL
+        if (_selectedChatId != null && previousPath == AppRoutes.settings) {
+          final chatUrl = '/chats/$_selectedChatId';
+          print('Router.pop: Restoring chat URL to $chatUrl');
+          BrowserUrlManager.updateUrl(chatUrl);
+        } else {
+          // Otherwise just go back to home
+          BrowserUrlManager.updateUrl(AppRoutes.home);
+        }
+      }
+
       notifyListeners();
     }
   }
@@ -243,6 +281,52 @@ class AppRouter extends RouterDelegate<RouteConfiguration>
     }
 
     return;
+  }
+
+  @override
+  Future<bool> popRoute() async {
+    // This is called when the user presses the back button in the browser
+    // or the back button on the device
+
+    if (_currentPath != AppRoutes.home) {
+      // First store the current path and chat ID
+      final previousPath = _currentPath;
+
+      // Set the path back to home
+      _currentPath = AppRoutes.home;
+
+      // If returning from settings, try to get the chat ID from browser state
+      if (previousPath == AppRoutes.settings && kIsWeb) {
+        final storedChatId = BrowserUrlManager.getStoredChatId();
+        if (storedChatId != null) {
+          // We found a stored chat ID, use it
+          _selectedChatId = storedChatId;
+          chatProvider.setActiveChat(storedChatId);
+        }
+      } else if (previousPath != AppRoutes.settings) {
+        // Clear selected chat ID if not returning from settings
+        _selectedChatId = null;
+      }
+
+      // Update browser URL if on web
+      if (kIsWeb) {
+        // If we have a chat ID and we're coming from settings,
+        // navigate back to the chat detail URL
+        if (_selectedChatId != null && previousPath == AppRoutes.settings) {
+          final chatUrl = '/chats/$_selectedChatId';
+          print('Router.popRoute: Restoring chat URL to $chatUrl');
+          BrowserUrlManager.updateUrl(chatUrl);
+        } else {
+          // Otherwise just go back to home
+          BrowserUrlManager.updateUrl(AppRoutes.home);
+        }
+      }
+
+      notifyListeners();
+      return true;
+    }
+
+    return false;
   }
 
   @override

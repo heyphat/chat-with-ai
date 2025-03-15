@@ -7,10 +7,12 @@ import '../models/message.dart';
 import '../utils/network_diagnostics.dart';
 import 'ai_service.dart';
 import 'dart:developer' as developer;
+import '../models/token_usage.dart';
 
 class AnthropicService implements AIService {
   static bool _hasRunDiagnostics = false;
   late final Dio _dio;
+  TokenUsage? _lastStreamTokenUsage;
 
   AnthropicService() {
     _dio = Dio(
@@ -35,7 +37,10 @@ class AnthropicService implements AIService {
   }
 
   @override
-  Future<String> getCompletion(List<Message> messages, String model) async {
+  Future<(String, TokenUsage?)> getCompletion(
+    List<Message> messages,
+    String model,
+  ) async {
     final apiKey = await _getApiKey();
     final endpoint = await _getEndpoint();
 
@@ -106,9 +111,14 @@ class AnthropicService implements AIService {
             // Handle both old and new API formats
             if (jsonResponse.containsKey('content') &&
                 jsonResponse['content'] is List) {
-              return jsonResponse['content'][0]['text'];
+              final String content = jsonResponse['content'][0]['text'];
+              final TokenUsage? tokenUsage =
+                  jsonResponse.containsKey('usage')
+                      ? TokenUsage.fromAnthropic(jsonResponse, model)
+                      : null;
+              return (content, tokenUsage);
             } else if (jsonResponse.containsKey('content')) {
-              return jsonResponse['content'];
+              throw Exception('Unexpected response format from Anthropic API');
             } else {
               throw Exception('Unexpected response format from Anthropic API');
             }
@@ -464,5 +474,10 @@ class AnthropicService implements AIService {
       developer.log('Error retrieving Anthropic endpoint: $e');
       return 'https://api.anthropic.com/v1/messages';
     }
+  }
+
+  @override
+  Future<TokenUsage?> getLastStreamTokenUsage() async {
+    return _lastStreamTokenUsage;
   }
 }
