@@ -1,0 +1,49 @@
+{
+  "files.exclude": {
+    // Build and cache directories
+    "build/": true,
+    ".dart_tool/": true,
+
+    // Flutter generated files
+    ".flutter-plugins": true,
+    ".flutter-plugins-dependencies": true,
+
+    // Metadata and configuration files
+    ".metadata": true,
+    "*.iml": true,
+    ".idea/": true,
+
+    // Git-related files (remove these if you want to see them)
+    ".git/": true,
+
+    // Platform specific directories (uncomment if you want to hide)
+    // "android/": false,
+    // "ios/": false,
+    // "web/": false,
+    // "linux/": false,
+    // "macos/": false,
+    // "windows/": false,
+
+    // Other files you might want to hide
+    "pubspec.lock": true,
+    "**/*.g.dart": true, // Hide generated Dart files
+    "**/*.freezed.dart": true, // Hide freezed generated files if you use it
+    "**/*.log": true,
+    //"**/data/*": true
+  },
+
+  // Additional helpful settings for Flutter development
+  "editor.formatOnSave": true,
+  "editor.codeActionsOnSave": {
+    "source.fixAll": "explicit"
+  },
+  "dart.previewFlutterUiGuides": true,
+  "dart.previewFlutterUiGuidesCustomTracking": true,
+  "dart.openDevTools": "flutter",
+  "editor.bracketPairColorization.enabled": true,
+  "editor.guides.bracketPairs": true,
+  "workbench.colorCustomizations": {
+    "statusBar.background": "#1976D2",
+    "statusBar.foreground": "#ffffff"
+  }
+}
