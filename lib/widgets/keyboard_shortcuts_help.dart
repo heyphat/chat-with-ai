@@ -38,6 +38,14 @@ class KeyboardShortcutsHelp extends StatelessWidget {
                       'Shift+Enter',
                       'Insert new line in message',
                     ),
+                    const SizedBox(height: 12),
+                    _buildShortcutRow(
+                      context,
+                      kIsWeb
+                          ? 'Cmd+Shift+N / Ctrl+Shift+N'
+                          : '⌘+Shift+N / Ctrl+Shift+N',
+                      'Create a new chat',
+                    ),
                   ],
                 ),
                 actions: [

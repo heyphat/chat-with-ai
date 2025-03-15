@@ -263,15 +263,41 @@ class _ChatListItem extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 4),
-              Chip(
-                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                visualDensity: VisualDensity.compact,
-                label: Text(
-                  _getModelDisplayName(metadata.provider, metadata.model),
-                  style: const TextStyle(fontSize: 10),
-                ),
-                avatar: _getProviderIcon(metadata.provider),
-                padding: EdgeInsets.zero,
+              Row(
+                children: [
+                  Chip(
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
+                    label: Text(
+                      _getModelDisplayName(metadata.provider, metadata.model),
+                      style: const TextStyle(fontSize: 10),
+                    ),
+                    avatar: _getProviderIcon(metadata.provider),
+                    padding: EdgeInsets.zero,
+                  ),
+
+                  // Display token information if available
+                  if (metadata.totalTokens != null)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 6.0),
+                      child: Chip(
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        visualDensity: VisualDensity.compact,
+                        label: Tooltip(
+                          message:
+                              metadata.totalCost != null
+                                  ? 'Total Cost: \$${metadata.totalCost!.toStringAsFixed(4)}'
+                                  : 'Total Tokens',
+                          child: Text(
+                            '${_formatTokenCount(metadata.totalTokens!)} tokens',
+                            style: const TextStyle(fontSize: 10),
+                          ),
+                        ),
+                        avatar: const Icon(Icons.token, size: 12),
+                        padding: EdgeInsets.zero,
+                      ),
+                    ),
+                ],
               ),
             ],
           ),
@@ -326,6 +352,17 @@ class _ChatListItem extends StatelessWidget {
     } else {
       // Format as year-month-day for other years
       return '${date.year}-${date.month}-${date.day}';
+    }
+  }
+
+  // Helper to format large token numbers
+  String _formatTokenCount(int count) {
+    if (count >= 1000000) {
+      return '${(count / 1000000).toStringAsFixed(1)}M';
+    } else if (count >= 1000) {
+      return '${(count / 1000).toStringAsFixed(1)}K';
+    } else {
+      return count.toString();
     }
   }
 }

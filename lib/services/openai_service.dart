@@ -99,7 +99,7 @@ class OpenAIService implements AIService {
       'temperature': 0.7,
       // 'stream': true, // Enable streaming
     });
-
+    //
     try {
       final request = http.Request('POST', Uri.parse(endpoint));
       request.headers.addAll(headers);

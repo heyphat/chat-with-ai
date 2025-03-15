@@ -12,6 +12,7 @@ import '../widgets/keyboard_shortcuts_help.dart';
 // import '../router/web_url_handler.dart';
 import '../router/browser_url_manager.dart';
 import 'settings_screen.dart';
+import 'dart:developer' as developer;
 
 // Use a global variable to preserve sidebar state across navigations
 // This ensures the sidebar state is maintained when switching between chats
@@ -33,7 +34,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final TextEditingController _messageController = TextEditingController();
   // Add FocusNode for the message input
   final FocusNode _messageInputFocusNode = FocusNode();
@@ -48,6 +49,9 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+
+    // Register for lifecycle events
+    WidgetsBinding.instance.addObserver(this);
 
     // Use the global sidebar state
     _showSidebar = _globalShowSidebar;
@@ -84,15 +88,55 @@ class _HomeScreenState extends State<HomeScreen> {
           _lastActiveChatId = newChatId;
         }
       }
+
+      // Request focus for keyboard shortcuts
+      _ensureKeyboardFocus();
     });
   }
 
   @override
   void dispose() {
+    // Remove lifecycle observer
+    WidgetsBinding.instance.removeObserver(this);
+
     _messageController.dispose();
     _messageInputFocusNode.dispose();
     _keyboardFocusNode.dispose();
     super.dispose();
+  }
+
+  // Lifecycle method to handle app state changes
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+
+    developer.log('App lifecycle state changed: $state');
+
+    // When app is resumed, ensure keyboard focus is restored
+    if (state == AppLifecycleState.resumed) {
+      _ensureKeyboardFocus();
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+
+    // Request focus when dependencies change, which happens on navigation changes
+    _ensureKeyboardFocus();
+  }
+
+  // Helper method to ensure keyboard focus is properly set
+  void _ensureKeyboardFocus() {
+    if (mounted && _keyboardFocusNode.canRequestFocus) {
+      developer.log('Requesting keyboard focus');
+      // Use a short delay to ensure focus is requested after the UI is fully rendered
+      Future.delayed(const Duration(milliseconds: 100), () {
+        if (mounted && _keyboardFocusNode.canRequestFocus) {
+          _keyboardFocusNode.requestFocus();
+        }
+      });
+    }
   }
 
   void _toggleSidebar() {
@@ -126,6 +170,16 @@ class _HomeScreenState extends State<HomeScreen> {
         (HardwareKeyboard.instance.isMetaPressed ||
             HardwareKeyboard.instance.isControlPressed)) {
       _focusMessageInput();
+      return KeyEventResult.handled;
+    }
+
+    // Handle Cmd+Shift+N for creating a new chat
+    if (event is KeyDownEvent &&
+        event.logicalKey == LogicalKeyboardKey.keyN &&
+        HardwareKeyboard.instance.isShiftPressed &&
+        (HardwareKeyboard.instance.isMetaPressed ||
+            HardwareKeyboard.instance.isControlPressed)) {
+      _showNewChatDialog();
       return KeyEventResult.handled;
     }
 
@@ -195,10 +249,29 @@ class _HomeScreenState extends State<HomeScreen> {
 
     // We don't need to update tracking variable here anymore with global state approach
 
+    // Ensure the widget can request focus
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _ensureKeyboardFocus();
+    });
+
     // Wrap the entire screen with a Focus widget to capture keyboard shortcuts
     return Focus(
       focusNode: _keyboardFocusNode,
       autofocus: true,
+      canRequestFocus: true,
+      onFocusChange: (hasFocus) {
+        if (!hasFocus) {
+          // If focus is lost, try to recapture it after a short delay
+          // This helps with scenarios where focus might be temporarily lost
+          Future.delayed(const Duration(milliseconds: 200), () {
+            if (mounted && _keyboardFocusNode.canRequestFocus) {
+              _keyboardFocusNode.requestFocus();
+            }
+          });
+        } else {
+          developer.log('Focus node has focus');
+        }
+      },
       onKeyEvent: _handleKeyboardShortcuts,
       child: Scaffold(
         backgroundColor: Theme.of(context).scaffoldBackgroundColor,
@@ -239,11 +312,23 @@ class _HomeScreenState extends State<HomeScreen> {
                         context: context,
                         position: position,
                         items: _buildProviderMenuItems(),
-                      ).then((Map<String, dynamic>? item) {
+                        elevation: 8,
+                      ).then((item) {
                         if (item != null) {
                           final AIProvider provider = item['provider'];
                           final String model = item['model'];
                           chatProvider.updateChatProvider(provider, model);
+
+                          // Preserve URL state after changing model
+                          if (kIsWeb) {
+                            // Add a small delay to ensure provider updates first
+                            Future.delayed(
+                              const Duration(milliseconds: 50),
+                              () {
+                                BrowserUrlManager.preserveUrlState();
+                              },
+                            );
+                          }
                         }
                       });
                     },
@@ -283,6 +368,13 @@ class _HomeScreenState extends State<HomeScreen> {
               onPressed: () {
                 if (widget.routeToSettings != null) {
                   widget.routeToSettings!();
+
+                  // Preserve URL state when navigating to settings
+                  if (kIsWeb) {
+                    Future.delayed(const Duration(milliseconds: 50), () {
+                      BrowserUrlManager.preserveUrlState();
+                    });
+                  }
                 } else {
                   // Fallback to direct navigation if router not provided
                   Navigator.push(
@@ -290,7 +382,12 @@ class _HomeScreenState extends State<HomeScreen> {
                     MaterialPageRoute(
                       builder: (context) => const SettingsScreen(),
                     ),
-                  );
+                  ).then((_) {
+                    // Preserve URL state after returning from settings
+                    if (kIsWeb) {
+                      BrowserUrlManager.preserveUrlState();
+                    }
+                  });
                 }
               },
               tooltip: 'Settings',

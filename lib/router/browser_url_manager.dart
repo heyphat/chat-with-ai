@@ -62,6 +62,35 @@ class BrowserUrlManager {
     }
   }
 
+  /// Updates the URL while preserving the current chat ID if the URL contains one
+  /// This is crucial for UI interactions like toggling theme or changing model
+  static void preserveUrlState() {
+    if (!kIsWeb) return;
+
+    try {
+      final currentPath = getCurrentPath();
+
+      // Check if the current path contains a chat ID (path format: /chats/[chatId])
+      final pathSegments = Uri.parse(currentPath).pathSegments;
+      if (pathSegments.length >= 2 && pathSegments[0] == 'chats') {
+        final chatId = pathSegments[1];
+
+        // If we have a valid chat ID, ensure it's in the URL
+        if (chatId.isNotEmpty) {
+          final chatUrl = '/chats/$chatId';
+
+          // Only update if the current URL doesn't match the expected format
+          if (currentPath != chatUrl) {
+            print('Preserving chat ID in URL: $chatUrl');
+            updateUrl(chatUrl);
+          }
+        }
+      }
+    } catch (e) {
+      print('Error preserving URL state: $e');
+    }
+  }
+
   /// Sanitize URL to prevent duplication in path and hash
   static String _sanitizeUrl(String url) {
     try {

@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_spinkit/flutter_spinkit.dart';
 import '../models/message.dart';
+import '../models/token_usage.dart';
 import 'math_markdown.dart';
 import '../router/web_url_handler.dart';
 
@@ -288,58 +289,78 @@ class MessageBubble extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     // Message content
-                    MathMarkdown(
-                      data:
-                          message.content.isNotEmpty
-                              ? message.content
-                              : ' ', // Ensure there's always something to render
-                      styleSheet: MarkdownStyleSheet(
-                        p: TextStyle(
-                          color:
-                              isUser
-                                  ? Colors.white
-                                  : Theme.of(
-                                    context,
-                                  ).colorScheme.onSurfaceVariant,
-                        ),
-                        code: TextStyle(
-                          backgroundColor:
-                              isUser
-                                  ? Theme.of(context).colorScheme.primary
-                                  : Theme.of(context)
-                                      .colorScheme
-                                      .surfaceContainerHighest
-                                      .withOpacity(0.7),
-                          color:
-                              isUser
-                                  ? Colors.white.withOpacity(0.9)
-                                  : Theme.of(context).colorScheme.primary,
-                          fontFamily: 'monospace',
-                          fontSize: 14.0,
-                        ),
-                        codeblockDecoration: BoxDecoration(
-                          color:
-                              isUser
-                                  ? Theme.of(
-                                    context,
-                                  ).colorScheme.primary.withOpacity(0.5)
-                                  : Theme.of(context)
-                                      .colorScheme
-                                      .surfaceContainerHighest
-                                      .withOpacity(0.5),
-                          borderRadius: BorderRadius.circular(8.0),
-                          border: Border.all(
-                            color:
-                                isUser
-                                    ? Colors.white.withOpacity(0.2)
-                                    : Theme.of(context).dividerColor,
-                            width: 1.0,
-                          ),
-                        ),
-                        codeblockPadding: const EdgeInsets.all(12.0),
-                        blockSpacing: 8.0,
-                      ),
-                      selectable: true,
+                    Builder(
+                      builder: (context) {
+                        try {
+                          return MathMarkdown(
+                            data:
+                                message.content.isNotEmpty
+                                    ? message.content
+                                    : ' ', // Ensure there's always something to render
+                            styleSheet: MarkdownStyleSheet(
+                              p: TextStyle(
+                                color:
+                                    isUser
+                                        ? Colors.white
+                                        : Theme.of(
+                                          context,
+                                        ).colorScheme.onSurfaceVariant,
+                              ),
+                              code: TextStyle(
+                                backgroundColor:
+                                    isUser
+                                        ? Theme.of(context).colorScheme.primary
+                                        : Theme.of(context)
+                                            .colorScheme
+                                            .surfaceContainerHighest
+                                            .withOpacity(0.7),
+                                color:
+                                    isUser
+                                        ? Colors.white.withOpacity(0.9)
+                                        : Theme.of(context).colorScheme.primary,
+                                fontFamily: 'monospace',
+                                fontSize: 14.0,
+                              ),
+                              codeblockDecoration: BoxDecoration(
+                                color:
+                                    isUser
+                                        ? Theme.of(
+                                          context,
+                                        ).colorScheme.primary.withOpacity(0.5)
+                                        : Theme.of(context)
+                                            .colorScheme
+                                            .surfaceContainerHighest
+                                            .withOpacity(0.5),
+                                borderRadius: BorderRadius.circular(8.0),
+                                border: Border.all(
+                                  color:
+                                      isUser
+                                          ? Colors.white.withOpacity(0.2)
+                                          : Theme.of(context).dividerColor,
+                                  width: 1.0,
+                                ),
+                              ),
+                              codeblockPadding: const EdgeInsets.all(12.0),
+                              blockSpacing: 8.0,
+                            ),
+                            selectable: true,
+                          );
+                        } catch (e) {
+                          // Fallback to simple text display on error
+                          debugPrint('Error rendering message markdown: $e');
+                          return Text(
+                            message.content.isNotEmpty ? message.content : ' ',
+                            style: TextStyle(
+                              color:
+                                  isUser
+                                      ? Colors.white
+                                      : Theme.of(
+                                        context,
+                                      ).colorScheme.onSurfaceVariant,
+                            ),
+                          );
+                        }
+                      },
                     ),
 
                     // Loading indicator or error message
@@ -367,21 +388,119 @@ class MessageBubble extends StatelessWidget {
                         ),
                       ),
 
-                    // Timestamp
+                    // Timestamp and token usage
                     Padding(
                       padding: const EdgeInsets.only(top: 4.0),
-                      child: Text(
-                        '${message.timestamp.hour}:${message.timestamp.minute.toString().padLeft(2, '0')}',
-                        style: TextStyle(
-                          fontSize: 10.0,
-                          color:
-                              isUser
-                                  ? Colors.white.withOpacity(0.7)
-                                  : Theme.of(context)
-                                      .colorScheme
-                                      .onSurfaceVariant
-                                      .withOpacity(0.7),
-                        ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          // Timestamp
+                          Text(
+                            '${message.timestamp.hour}:${message.timestamp.minute.toString().padLeft(2, '0')}',
+                            style: TextStyle(
+                              fontSize: 10.0,
+                              color:
+                                  isUser
+                                      ? Colors.white.withOpacity(0.7)
+                                      : Theme.of(context)
+                                          .colorScheme
+                                          .onSurfaceVariant
+                                          .withOpacity(0.7),
+                            ),
+                          ),
+
+                          // Token usage info - only show for AI messages that aren't loading
+                          if (!isUser &&
+                              !message.isLoading &&
+                              message.tokenUsage != null)
+                            Padding(
+                              padding: const EdgeInsets.only(left: 6.0),
+                              child: Tooltip(
+                                message: _buildTokenUsageTooltip(
+                                  message.tokenUsage!,
+                                ),
+                                preferBelow: false,
+                                showDuration: const Duration(seconds: 5),
+                                child: InkWell(
+                                  onTap: () {
+                                    // Show a SnackBar with more detailed information
+                                    ScaffoldMessenger.of(
+                                      context,
+                                    ).clearSnackBars();
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            const Text('Token Usage:'),
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              'Input: ${message.tokenUsage!.promptTokens ?? 0}',
+                                            ),
+                                            Text(
+                                              'Output: ${message.tokenUsage!.completionTokens ?? 0}',
+                                            ),
+                                            Text(
+                                              'Total: ${message.tokenUsage!.totalTokens ?? 0}',
+                                            ),
+                                            if (message.tokenUsage!.totalCost !=
+                                                null)
+                                              Text(
+                                                'Cost: \$${message.tokenUsage!.totalCost!.toStringAsFixed(5)}',
+                                                style: const TextStyle(
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                        duration: const Duration(seconds: 5),
+                                      ),
+                                    );
+                                  },
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 4.0,
+                                      vertical: 1.0,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .surfaceContainerHighest
+                                          .withOpacity(0.7),
+                                      borderRadius: BorderRadius.circular(4.0),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          Icons.token,
+                                          size: 8.0,
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .onSurfaceVariant
+                                              .withOpacity(0.9),
+                                        ),
+                                        const SizedBox(width: 2.0),
+                                        Text(
+                                          '${message.tokenUsage!.totalTokens ?? '?'} tokens',
+                                          style: TextStyle(
+                                            fontSize: 8.0,
+                                            fontFamily: 'monospace',
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .onSurfaceVariant
+                                                .withOpacity(0.9),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
                     ),
                   ],
@@ -392,5 +511,19 @@ class MessageBubble extends StatelessWidget {
         },
       ),
     );
+  }
+
+  String _buildTokenUsageTooltip(TokenUsage usage) {
+    final StringBuffer buffer = StringBuffer();
+
+    buffer.writeln('Input: ${usage.promptTokens ?? 0} tokens');
+    buffer.writeln('Output: ${usage.completionTokens ?? 0} tokens');
+    buffer.writeln('Total: ${usage.totalTokens ?? 0} tokens');
+
+    if (usage.totalCost != null) {
+      buffer.writeln('Cost: \$${usage.totalCost!.toStringAsFixed(5)}');
+    }
+
+    return buffer.toString();
   }
 }

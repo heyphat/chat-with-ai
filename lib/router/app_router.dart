@@ -111,13 +111,27 @@ class AppRouter extends RouterDelegate<RouteConfiguration>
         chatProvider.setActiveChat(_selectedChatId!);
       }
     } else {
-      _selectedChatId = null;
+      // Only clear the chatId if we're not on a chat route
+      // But preserve it in memory if we're navigating to settings
+      if (_currentPath != AppRoutes.settings) {
+        _selectedChatId = null;
+      }
     }
 
     // Directly update the browser URL if on web
     if (kIsWeb) {
       print('Router.navigateTo: Updating URL to $path');
-      BrowserUrlManager.updateUrl(path);
+
+      // If navigating to settings while having a chat selected, use our preservation method
+      if (_currentPath == AppRoutes.settings && _selectedChatId != null) {
+        // First navigate to settings, then restore the chat ID in the URL
+        BrowserUrlManager.updateUrl(path);
+        Future.delayed(Duration(milliseconds: 50), () {
+          BrowserUrlManager.preserveUrlState();
+        });
+      } else {
+        BrowserUrlManager.updateUrl(path);
+      }
     }
 
     notifyListeners();

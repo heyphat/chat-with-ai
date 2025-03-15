@@ -42,19 +42,65 @@ class MathMarkdown extends StatelessWidget {
     String content, {
     bool fallback = false,
   }) {
+    // Use a try-catch block to handle potential selection errors
     return Container(
       width: double.infinity,
       alignment: Alignment.topLeft,
-      child: MarkdownBody(
-        data: content,
-        selectable: selectable && !fallback,
-        styleSheet: _getEnhancedStyleSheet(context),
-        softLineBreak: false, // Force hard line breaks
-        builders: {
-          'code': CodeElementBuilder(context, _getEnhancedStyleSheet(context)),
-          'pre': CodeElementBuilder(context, _getEnhancedStyleSheet(context)),
+      child: Builder(
+        builder: (context) {
+          // Wrap in a try-catch to handle selection errors
+          try {
+            return MarkdownBody(
+              data: content,
+              selectable: selectable && !fallback,
+              styleSheet: _getEnhancedStyleSheet(context),
+              softLineBreak: false, // Force hard line breaks
+              builders: {
+                'code': CodeElementBuilder(
+                  context,
+                  _getEnhancedStyleSheet(context),
+                ),
+                'pre': CodeElementBuilder(
+                  context,
+                  _getEnhancedStyleSheet(context),
+                ),
+              },
+              extensionSet: md.ExtensionSet.gitHubWeb,
+              // Add error handling for onTapLink
+              onTapLink: (text, href, title) {
+                try {
+                  // Safe link handling
+                  if (href != null) {
+                    // Handle link tap (could add navigation or URL launching here)
+                    debugPrint('Tapped on link: $href');
+                  }
+                } catch (e) {
+                  debugPrint('Error handling link tap: $e');
+                }
+              },
+            );
+          } catch (e) {
+            // Fallback to non-selectable markdown if there's an error
+            debugPrint('Error rendering markdown with selection: $e');
+            return MarkdownBody(
+              data: content,
+              selectable: false, // Disable selection in fallback mode
+              styleSheet: _getEnhancedStyleSheet(context),
+              softLineBreak: false,
+              builders: {
+                'code': CodeElementBuilder(
+                  context,
+                  _getEnhancedStyleSheet(context),
+                ),
+                'pre': CodeElementBuilder(
+                  context,
+                  _getEnhancedStyleSheet(context),
+                ),
+              },
+              extensionSet: md.ExtensionSet.gitHubWeb,
+            );
+          }
         },
-        extensionSet: md.ExtensionSet.gitHubWeb,
       ),
     );
   }
@@ -167,77 +213,108 @@ class CodeElementBuilder extends MarkdownElementBuilder {
     TextStyle? parentStyle,
     TextStyle? textStyle,
   ) {
-    // Simple determination of code block vs inline code by tag
-    final isCodeBlock = element.tag == 'pre';
-    String codeContent = element.textContent;
-    // String language = '';
+    try {
+      // Simple determination of code block vs inline code by tag
+      final isCodeBlock = element.tag == 'pre';
+      String codeContent = element.textContent;
+      // String language = '';
 
-    // Format the code content
-    codeContent = _formatCodeContent(codeContent);
+      // Format the code content
+      codeContent = _formatCodeContent(codeContent);
 
-    if (isCodeBlock) {
-      // Multi-line code block
-      return Container(
-        width: double.infinity,
-        margin: const EdgeInsets.symmetric(vertical: 8.0),
-        decoration:
-            styleSheet.codeblockDecoration ??
-            BoxDecoration(
-              color: Theme.of(
-                context,
-              ).colorScheme.surfaceContainerHighest.withOpacity(0.5),
-              borderRadius: BorderRadius.circular(8.0),
-              border: Border.all(
-                color: Theme.of(context).dividerColor,
-                width: 1.0,
+      if (isCodeBlock) {
+        // Multi-line code block
+        return Container(
+          width: double.infinity,
+          margin: const EdgeInsets.symmetric(vertical: 8.0),
+          decoration:
+              styleSheet.codeblockDecoration ??
+              BoxDecoration(
+                color: Theme.of(
+                  context,
+                ).colorScheme.surfaceContainerHighest.withOpacity(0.5),
+                borderRadius: BorderRadius.circular(8.0),
+                border: Border.all(
+                  color: Theme.of(context).dividerColor,
+                  width: 1.0,
+                ),
               ),
-            ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding:
-                  styleSheet.codeblockPadding ?? const EdgeInsets.all(16.0),
-              child: SelectableText(
-                codeContent,
-                style:
-                    styleSheet.code ??
-                    TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 14.0,
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding:
+                    styleSheet.codeblockPadding ?? const EdgeInsets.all(16.0),
+                child: Builder(
+                  builder: (context) {
+                    try {
+                      return SelectableText(
+                        codeContent,
+                        style:
+                            styleSheet.code ??
+                            TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 14.0,
+                              color:
+                                  Theme.of(
+                                    context,
+                                  ).colorScheme.onSurfaceVariant,
+                            ),
+                      );
+                    } catch (e) {
+                      // Fallback to non-selectable text on error
+                      debugPrint('Error in code block selection: $e');
+                      return Text(
+                        codeContent,
+                        style:
+                            styleSheet.code ??
+                            TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 14.0,
+                              color:
+                                  Theme.of(
+                                    context,
+                                  ).colorScheme.onSurfaceVariant,
+                            ),
+                      );
+                    }
+                  },
+                ),
               ),
-            ),
-          ],
-        ),
-      );
-    } else if (element.tag == 'code') {
-      // Inline code
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 4.0, vertical: 2.0),
-        decoration: BoxDecoration(
-          color:
-              styleSheet.code?.backgroundColor ??
-              Theme.of(
-                context,
-              ).colorScheme.surfaceContainerHighest.withOpacity(0.5),
-          borderRadius: BorderRadius.circular(4.0),
-        ),
-        child: Text(
-          codeContent,
-          style:
-              styleSheet.code ??
-              TextStyle(
-                fontFamily: 'monospace',
-                fontSize: 14.0,
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-        ),
-      );
+            ],
+          ),
+        );
+      } else if (element.tag == 'code') {
+        // Inline code
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 4.0, vertical: 2.0),
+          decoration: BoxDecoration(
+            color:
+                styleSheet.code?.backgroundColor ??
+                Theme.of(
+                  context,
+                ).colorScheme.surfaceContainerHighest.withOpacity(0.5),
+            borderRadius: BorderRadius.circular(4.0),
+          ),
+          child: Text(
+            codeContent,
+            style:
+                styleSheet.code ??
+                TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 14.0,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+          ),
+        );
+      }
+
+      // Let other elements be handled by the default builder
+      return null;
+    } catch (e) {
+      debugPrint('Error in CodeElementBuilder: $e');
+      // Return a simple text representation on error
+      return Text(element.textContent, style: textStyle);
     }
-
-    // Let other elements be handled by the default builder
-    return null;
   }
 }

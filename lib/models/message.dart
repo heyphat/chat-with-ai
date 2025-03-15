@@ -1,3 +1,5 @@
+import 'token_usage.dart';
+
 enum MessageRole { user, assistant, system }
 
 class Message {
@@ -7,6 +9,7 @@ class Message {
   final DateTime timestamp;
   final bool isLoading;
   final String? error;
+  final TokenUsage? tokenUsage;
 
   Message({
     required this.id,
@@ -15,6 +18,7 @@ class Message {
     required this.timestamp,
     this.isLoading = false,
     this.error,
+    this.tokenUsage,
   });
 
   factory Message.fromJson(Map<String, dynamic> json) {
@@ -25,6 +29,10 @@ class Message {
       timestamp: DateTime.parse(json['timestamp']),
       isLoading: json['isLoading'] ?? false,
       error: json['error'],
+      tokenUsage:
+          json['tokenUsage'] != null
+              ? TokenUsage.fromJson(json['tokenUsage'])
+              : null,
     );
   }
 
@@ -36,6 +44,7 @@ class Message {
       'timestamp': timestamp.toIso8601String(),
       'isLoading': isLoading,
       'error': error,
+      'tokenUsage': tokenUsage?.toJson(),
     };
   }
 
@@ -46,6 +55,7 @@ class Message {
     DateTime? timestamp,
     bool? isLoading,
     String? error,
+    TokenUsage? tokenUsage,
   }) {
     return Message(
       id: id ?? this.id,
@@ -54,6 +64,7 @@ class Message {
       timestamp: timestamp ?? this.timestamp,
       isLoading: isLoading ?? this.isLoading,
       error: error ?? this.error,
+      tokenUsage: tokenUsage ?? this.tokenUsage,
     );
   }
-} 
+}
