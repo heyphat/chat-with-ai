@@ -28,6 +28,7 @@ class _MessageInputState extends State<MessageInput> {
     final inputWidget = Container(
       width: double.infinity,
       decoration: BoxDecoration(
+        color: Theme.of(context).scaffoldBackgroundColor,
         borderRadius: BorderRadius.circular(8.0),
         border: Border.all(
           color: Theme.of(context).dividerColor.withOpacity(0.2),

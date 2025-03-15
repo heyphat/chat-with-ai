@@ -310,16 +310,24 @@ class _HomeScreenState extends State<HomeScreen> {
                 // Message input positioned at the bottom
                 if (chatProvider.activeChat != null && !_isLoadingChat)
                   Positioned(
-                    left: 0,
+                    left:
+                        _showSidebar
+                            ? 4
+                            : 0, // Add 4px offset when sidebar is open to show shadow
                     right: 0,
                     bottom: 0,
-                    child: MessageInput(
-                      controller: _messageController,
-                      onSend: (message) {
-                        chatProvider.sendMessage(message);
-                        _messageController.clear();
-                      },
-                      isLoading: chatProvider.isLoading,
+                    child: Material(
+                      elevation: 0,
+                      color: Colors.transparent,
+                      shadowColor: Colors.transparent,
+                      child: MessageInput(
+                        controller: _messageController,
+                        onSend: (message) {
+                          chatProvider.sendMessage(message);
+                          _messageController.clear();
+                        },
+                        isLoading: chatProvider.isLoading,
+                      ),
                     ),
                   ),
               ],
