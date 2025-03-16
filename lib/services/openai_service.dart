@@ -60,10 +60,12 @@ class OpenAIService implements AIService {
         final jsonResponse = jsonDecode(response.body);
         final String content = jsonResponse['choices'][0]['message']['content'];
 
-        // Parse token usage information
+        // Parse token usage information with pricing info
         final TokenUsage? tokenUsage = TokenUsage.fromOpenAI(
           jsonResponse,
           model,
+          costPerThousandTokens:
+              TokenPricing.defaultPricing().pricePerThousandTokens,
         );
 
         // Log token usage information
@@ -75,6 +77,7 @@ class OpenAIService implements AIService {
               'promptTokens': tokenUsage.promptTokens,
               'completionTokens': tokenUsage.completionTokens,
               'totalTokens': tokenUsage.totalTokens,
+              'totalCost': tokenUsage.totalCost,
             },
           );
         }
@@ -147,8 +150,10 @@ class OpenAIService implements AIService {
       // Clear the previous token usage in case we're reusing this service instance
       _lastStreamTokenUsage = null;
 
-      // Variables to accumulate data for token usage calculation
-      Map<String, dynamic> lastChunkData = {};
+      // Keep track of recent chunks to look for token usage data that often appears right before [DONE]
+      final recentChunks = <Map<String, dynamic>>[];
+      final maxRecentChunks =
+          5; // Store the last 5 chunks to check for token usage
 
       // Process the stream
       await for (final chunk in response.stream
@@ -158,28 +163,67 @@ class OpenAIService implements AIService {
           final jsonStr = chunk.substring(6);
 
           if (jsonStr == '[DONE]') {
-            // Process the last chunk for token usage information
-            if (lastChunkData.containsKey('usage')) {
-              _lastStreamTokenUsage = TokenUsage.fromOpenAI(
-                lastChunkData,
-                model,
-              );
-              _logger.info(
-                'Stream token usage information found in final chunk',
-                tag: 'OPENAI',
-                data: {
-                  'promptTokens': _lastStreamTokenUsage?.promptTokens,
-                  'completionTokens': _lastStreamTokenUsage?.completionTokens,
-                  'totalTokens': _lastStreamTokenUsage?.totalTokens,
-                },
-              );
+            // When we get [DONE], check the recent chunks for token usage data
+            _logger.debug(
+              'Received [DONE], checking recent chunks for token usage',
+              tag: 'OPENAI',
+            );
+
+            // Check recent chunks in reverse order (most recent first)
+            for (final recentChunk in recentChunks.reversed) {
+              if (recentChunk.containsKey('usage')) {
+                _lastStreamTokenUsage = TokenUsage.fromOpenAI(
+                  recentChunk,
+                  model,
+                  costPerThousandTokens:
+                      TokenPricing.defaultPricing().pricePerThousandTokens,
+                );
+                _logger.info(
+                  'Stream token usage information found in recent chunk before [DONE]',
+                  tag: 'OPENAI',
+                  data: {
+                    'promptTokens': _lastStreamTokenUsage?.promptTokens,
+                    'completionTokens': _lastStreamTokenUsage?.completionTokens,
+                    'totalTokens': _lastStreamTokenUsage?.totalTokens,
+                    'totalCost': _lastStreamTokenUsage?.totalCost,
+                  },
+                );
+                break;
+              }
             }
             break; // End of stream
           }
 
           try {
             final jsonData = jsonDecode(jsonStr);
-            lastChunkData = jsonData; // Store the latest chunk for token usage
+
+            // Store this chunk for later inspection
+            recentChunks.add(jsonData);
+            if (recentChunks.length > maxRecentChunks) {
+              recentChunks.removeAt(
+                0,
+              ); // Remove oldest chunk if we exceed our limit
+            }
+
+            // Check for token usage information in this chunk
+            if (jsonData.containsKey('usage')) {
+              _lastStreamTokenUsage = TokenUsage.fromOpenAI(
+                jsonData,
+                model,
+                costPerThousandTokens:
+                    TokenPricing.defaultPricing().pricePerThousandTokens,
+              );
+              _logger.info(
+                'Stream token usage information found in current chunk',
+                tag: 'OPENAI',
+                data: {
+                  'promptTokens': _lastStreamTokenUsage?.promptTokens,
+                  'completionTokens': _lastStreamTokenUsage?.completionTokens,
+                  'totalTokens': _lastStreamTokenUsage?.totalTokens,
+                  'totalCost': _lastStreamTokenUsage?.totalCost,
+                },
+              );
+            }
 
             final delta = jsonData['choices'][0]['delta'];
             if (delta != null && delta.containsKey('content')) {
@@ -190,6 +234,7 @@ class OpenAIService implements AIService {
             }
           } catch (e) {
             // Skip invalid JSON
+            _logger.debug('Error parsing JSON chunk: $e', tag: 'OPENAI');
           }
         }
       }
@@ -223,7 +268,12 @@ class OpenAIService implements AIService {
 
           if (usageResponse.statusCode == 200) {
             final jsonResponse = jsonDecode(usageResponse.body);
-            _lastStreamTokenUsage = TokenUsage.fromOpenAI(jsonResponse, model);
+            _lastStreamTokenUsage = TokenUsage.fromOpenAI(
+              jsonResponse,
+              model,
+              costPerThousandTokens:
+                  TokenPricing.defaultPricing().pricePerThousandTokens,
+            );
             _logger.info(
               'Retrieved token usage from separate API call',
               tag: 'OPENAI',
@@ -231,6 +281,7 @@ class OpenAIService implements AIService {
                 'promptTokens': _lastStreamTokenUsage?.promptTokens,
                 'completionTokens': _lastStreamTokenUsage?.completionTokens,
                 'totalTokens': _lastStreamTokenUsage?.totalTokens,
+                'totalCost': _lastStreamTokenUsage?.totalCost,
               },
             );
           }

@@ -5,6 +5,7 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_spinkit/flutter_spinkit.dart';
 import '../models/message.dart';
 import '../models/token_usage.dart';
+import '../services/message_renderer.dart';
 import 'math_markdown.dart';
 import '../router/web_url_handler.dart';
 
@@ -23,47 +24,41 @@ class ChatMessageList extends StatefulWidget {
 class _ChatMessageListState extends State<ChatMessageList> {
   final ScrollController _scrollController = ScrollController();
   bool _needsScroll = false;
-  // int _previousMessageCount = 0;
-  bool _showScrollToBottomButton = false; // Track whether to show the button
+  List<Message> _renderedMessages = [];
 
   @override
   void initState() {
     super.initState();
-    // _previousMessageCount = widget.messages.length;
+
+    // Pre-render initial messages
+    _preRenderMessages();
 
     // Always scroll to bottom when the widget is first built
     _needsScroll = true;
+
+    // Set up post-frame callback for initial scroll
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && _scrollController.hasClients) {
-        // Use delayed scrolling to ensure content is properly laid out first
-        _scrollToBottomWithRetry(animate: false);
+      // First attempt immediately after first frame
+      if (mounted) {
+        Future.microtask(() {
+          if (mounted && _scrollController.hasClients) {
+            _scrollToBottom(animate: false);
+          }
+
+          // Second attempt with delay
+          Future.delayed(const Duration(milliseconds: 300), () {
+            if (mounted && _scrollController.hasClients) {
+              _scrollToBottom(animate: false);
+            }
+          });
+        });
       }
     });
-
-    // Add scroll listener to detect when to show the scroll-to-bottom button
-    _scrollController.addListener(_scrollListener);
   }
 
-  // Detect when user has scrolled up from the bottom
-  void _scrollListener() {
-    if (!mounted || !_scrollController.hasClients) return;
-
-    // Check if content is actually scrollable
-    final isScrollable = _scrollController.position.maxScrollExtent > 0;
-
-    // Only show button when:
-    // 1. Content is scrollable (longer than screen)
-    // 2. User has scrolled up significantly from the bottom
-    final distanceFromBottom =
-        _scrollController.position.maxScrollExtent -
-        _scrollController.position.pixels;
-    final shouldShowButton = isScrollable && distanceFromBottom > 100;
-
-    if (_showScrollToBottomButton != shouldShowButton) {
-      setState(() {
-        _showScrollToBottomButton = shouldShowButton;
-      });
-    }
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
   }
 
   @override
@@ -75,27 +70,86 @@ class _ChatMessageListState extends State<ChatMessageList> {
       _webUrlHandler.lockCurrentUrl();
     }
 
-    // Always scroll to bottom when chat is loaded or when new messages are added
-    _needsScroll = true;
-    // _previousMessageCount = widget.messages.length;
+    // Pre-render messages if they've changed
+    if (widget.messages != oldWidget.messages) {
+      _preRenderMessages();
+    }
 
-    // Reset the scroll-to-bottom button state when switching to a new chat
-    setState(() {
-      _showScrollToBottomButton = false;
-    });
+    // Check if messages were added or changed
+    final bool messagesChanged =
+        widget.messages.length != oldWidget.messages.length ||
+        (widget.messages.isNotEmpty &&
+            oldWidget.messages.isNotEmpty &&
+            widget.messages.last.id != oldWidget.messages.last.id);
+
+    // Check for streaming message (a message is currently loading)
+    final bool hasStreamingMessage =
+        widget.messages.isNotEmpty &&
+        widget.messages.any((message) => message.isLoading);
+
+    // Check if last message content has changed (for streaming updates)
+    bool streamingContentChanged = false;
+    if (widget.messages.isNotEmpty &&
+        oldWidget.messages.isNotEmpty &&
+        widget.messages.length == oldWidget.messages.length) {
+      // Compare each message content to detect streaming changes
+      for (int i = 0; i < widget.messages.length; i++) {
+        if (widget.messages[i].id == oldWidget.messages[i].id &&
+            widget.messages[i].content != oldWidget.messages[i].content &&
+            widget.messages[i].isLoading) {
+          streamingContentChanged = true;
+          break;
+        }
+      }
+    }
+
+    final bool isNewMessage =
+        widget.messages.length > oldWidget.messages.length;
+
+    // Check if we're already at the bottom (with a small tolerance)
+    bool isAlreadyAtBottom = false;
+    if (mounted && _scrollController.hasClients) {
+      try {
+        final currentOffset = _scrollController.offset;
+        final maxExtent = _scrollController.position.maxScrollExtent;
+        isAlreadyAtBottom = (maxExtent - currentOffset).abs() < 20.0;
+      } catch (e) {
+        // Ignore error (might happen during layout changes)
+      }
+    }
+
+    // Scroll to bottom when messages change or during streaming updates
+    if ((messagesChanged || streamingContentChanged || hasStreamingMessage) &&
+        (!isAlreadyAtBottom || isNewMessage)) {
+      _needsScroll = true;
+
+      // For new messages or streaming updates, try to scroll immediately to reduce visible delay
+      if ((isNewMessage || streamingContentChanged || hasStreamingMessage) &&
+          mounted &&
+          _scrollController.hasClients) {
+        try {
+          // Try to immediately jump to bottom first
+          _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+        } catch (e) {
+          // Ignore errors here, will be handled in the post-frame callback
+          debugPrint('Initial scroll attempt failed: $e');
+        }
+      }
+    }
 
     // Scroll after the frame is rendered
     SchedulerBinding.instance.addPostFrameCallback((_) {
       if (mounted && _needsScroll) {
-        // Use delayed scrolling to ensure content is properly laid out first
-        // Use animate: false to instantly jump to bottom without animation when switching chats
-        _scrollToBottomWithRetry(animate: false);
+        // Use full retry mechanism for reliability
+        // Don't animate during streaming for smoother updates
+        _scrollToBottomWithRetry(
+          animate:
+              messagesChanged &&
+              !isNewMessage &&
+              !streamingContentChanged &&
+              !hasStreamingMessage,
+        );
         _needsScroll = false;
-      }
-
-      // Re-evaluate if the button should be shown based on new content
-      if (mounted && _scrollController.hasClients) {
-        _scrollListener();
       }
 
       // For web: ensure the URL is preserved after all updates are complete
@@ -107,27 +161,62 @@ class _ChatMessageListState extends State<ChatMessageList> {
     });
   }
 
+  // Pre-render messages for improved scrolling performance
+  void _preRenderMessages() {
+    if (!mounted) return;
+
+    _renderedMessages = MessageRenderer.renderMessages(
+      widget.messages,
+      context,
+    );
+  }
+
   // Enhanced scrolling mechanism with retry
   void _scrollToBottomWithRetry({bool animate = true}) {
-    if (!mounted || !_scrollController.hasClients) return;
+    if (!mounted) return;
 
     // For web: ensure the URL is locked before scrolling
     if (kIsWeb) {
       _webUrlHandler.lockCurrentUrl();
     }
 
-    // First attempt with a small delay to allow layout
-    Future.delayed(const Duration(milliseconds: 50), () {
-      if (!mounted || !_scrollController.hasClients) return;
-      _scrollToBottom(animate: animate);
+    // Use microtask to ensure we're not in the middle of a frame
+    Future.microtask(() {
+      if (!mounted) return;
 
-      // Second attempt with a longer delay to catch any layout updates
-      Future.delayed(const Duration(milliseconds: 200), () {
-        if (!mounted || !_scrollController.hasClients) return;
-        // Always use immediate jump for second attempt
-        _scrollToBottom(
-          animate: false,
-        ); // Use immediate jump for second attempt
+      // First attempt immediately
+      if (_scrollController.hasClients) {
+        _scrollToBottom(animate: animate);
+      }
+
+      // Sequence of retries with increasing delays - faster sequence for better responsiveness
+      Future.delayed(const Duration(milliseconds: 10), () {
+        if (!mounted) return;
+        if (_scrollController.hasClients) {
+          _scrollToBottom(animate: animate);
+        }
+
+        Future.delayed(const Duration(milliseconds: 50), () {
+          if (!mounted) return;
+          if (_scrollController.hasClients) {
+            _scrollToBottom(animate: false);
+          }
+
+          Future.delayed(const Duration(milliseconds: 100), () {
+            if (!mounted) return;
+            if (_scrollController.hasClients) {
+              _scrollToBottom(animate: false);
+            }
+
+            // Extra attempt for very complex layouts
+            Future.delayed(const Duration(milliseconds: 200), () {
+              if (!mounted) return;
+              if (_scrollController.hasClients) {
+                _scrollToBottom(animate: false);
+              }
+            });
+          });
+        });
       });
     });
   }
@@ -144,23 +233,43 @@ class _ChatMessageListState extends State<ChatMessageList> {
       // Get current max extent - this might be incorrect if layout is still happening
       final maxExtent = _scrollController.position.maxScrollExtent;
 
-      if (animate) {
+      // Check if we're already at the bottom (with a small tolerance)
+      final double currentOffset = _scrollController.offset;
+      final double targetOffset = maxExtent;
+      final bool alreadyAtBottom = (targetOffset - currentOffset).abs() < 10.0;
+
+      // If already at bottom, skip animation for smoother experience
+      final bool shouldAnimate = animate && !alreadyAtBottom;
+
+      if (shouldAnimate) {
         _scrollController.animateTo(
           maxExtent,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
+          duration: const Duration(milliseconds: 150), // Faster animation
+          curve: Curves.easeOutQuart, // Smoother curve
         );
       } else {
         _scrollController.jumpTo(maxExtent);
       }
     } catch (e) {
       debugPrint('Error scrolling: $e');
+      // Schedule another attempt if there was an error
+      Future.delayed(const Duration(milliseconds: 50), () {
+        // Faster retry
+        if (mounted && _scrollController.hasClients) {
+          try {
+            _scrollController.jumpTo(
+              _scrollController.position.maxScrollExtent,
+            );
+          } catch (e2) {
+            debugPrint('Retry scroll error: $e2');
+          }
+        }
+      });
     }
   }
 
   @override
   void dispose() {
-    _scrollController.removeListener(_scrollListener);
     _scrollController.dispose();
     super.dispose();
   }
@@ -173,77 +282,30 @@ class _ChatMessageListState extends State<ChatMessageList> {
       );
     }
 
-    return Stack(
-      children: [
-        // ListView for messages
-        ListView.builder(
-          key: ValueKey('chat_list_${widget.messages.length}'),
-          controller: _scrollController,
-          padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 16.0),
-          itemCount: widget.messages.length,
-          // Use physics that won't affect the app bar
-          physics: const ClampingScrollPhysics(
-            parent: AlwaysScrollableScrollPhysics(),
-          ),
-          clipBehavior: Clip.none,
-          itemBuilder: (context, index) {
-            final message = widget.messages[index];
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 16.0),
-              child: MessageBubble(
-                key: ValueKey(message.id),
-                message: message,
-                isUser: message.role == MessageRole.user,
-              ),
-            );
-          },
-        ),
-
-        // Scroll to bottom button
-        if (_showScrollToBottomButton)
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 40, // Position above the message input
-            child: Center(
-              child: AnimatedOpacity(
-                opacity: _showScrollToBottomButton ? 1.0 : 0.0,
-                duration: const Duration(milliseconds: 200),
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: Theme.of(
-                      context,
-                    ).colorScheme.primaryContainer.withOpacity(0.9),
-                    borderRadius: BorderRadius.circular(20),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.2),
-                        blurRadius: 4,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      onTap: () => _scrollToBottomWithRetry(animate: true),
-                      borderRadius: BorderRadius.circular(20),
-                      child: Padding(
-                        padding: const EdgeInsets.all(8),
-                        child: Icon(
-                          Icons.keyboard_arrow_down,
-                          color:
-                              Theme.of(context).colorScheme.onPrimaryContainer,
-                          size: 15,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
+    // Just return the ListView by itself, no Stack or buttons
+    return ListView.builder(
+      controller: _scrollController,
+      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 16.0),
+      itemCount: _renderedMessages.length,
+      cacheExtent: 1000, // Cache more items for smoother scrolling
+      physics: const ClampingScrollPhysics(
+        parent: AlwaysScrollableScrollPhysics(),
+      ),
+      clipBehavior: Clip.none,
+      itemBuilder: (context, index) {
+        final message = _renderedMessages[index];
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 16.0),
+          child: RepaintBoundary(
+            // Add RepaintBoundary for improved performance
+            child: MessageBubble(
+              key: ValueKey(message.id),
+              message: message,
+              isUser: message.role == MessageRole.user,
             ),
           ),
-      ],
+        );
+      },
     );
   }
 }
@@ -288,17 +350,80 @@ class MessageBubble extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // Message content
+                    // Message content - Use pre-rendered content if available
                     Builder(
                       builder: (context) {
-                        try {
-                          return MathMarkdown(
-                            data:
-                                message.content.isNotEmpty
-                                    ? message.content
-                                    : ' ', // Ensure there's always something to render
-                            styleSheet: MarkdownStyleSheet(
-                              p: TextStyle(
+                        if (message.renderedContent != null) {
+                          // Use pre-rendered content
+                          return message.renderedContent!;
+                        } else {
+                          // Fallback to rendering on-demand
+                          try {
+                            return MathMarkdown(
+                              data:
+                                  message.content.isNotEmpty
+                                      ? message.content
+                                      : ' ', // Ensure there's always something to render
+                              styleSheet: MarkdownStyleSheet(
+                                p: TextStyle(
+                                  color:
+                                      isUser
+                                          ? Colors.white
+                                          : Theme.of(
+                                            context,
+                                          ).colorScheme.onSurfaceVariant,
+                                ),
+                                code: TextStyle(
+                                  backgroundColor:
+                                      isUser
+                                          ? Theme.of(
+                                            context,
+                                          ).colorScheme.primary
+                                          : Theme.of(context)
+                                              .colorScheme
+                                              .surfaceContainerHighest
+                                              .withOpacity(0.7),
+                                  color:
+                                      isUser
+                                          ? Colors.white.withOpacity(0.9)
+                                          : Theme.of(
+                                            context,
+                                          ).colorScheme.primary,
+                                  fontFamily: 'monospace',
+                                  fontSize: 14.0,
+                                ),
+                                codeblockDecoration: BoxDecoration(
+                                  color:
+                                      isUser
+                                          ? Theme.of(
+                                            context,
+                                          ).colorScheme.primary.withOpacity(0.5)
+                                          : Theme.of(context)
+                                              .colorScheme
+                                              .surfaceContainerHighest
+                                              .withOpacity(0.5),
+                                  borderRadius: BorderRadius.circular(8.0),
+                                  border: Border.all(
+                                    color:
+                                        isUser
+                                            ? Colors.white.withOpacity(0.2)
+                                            : Theme.of(context).dividerColor,
+                                    width: 1.0,
+                                  ),
+                                ),
+                                codeblockPadding: const EdgeInsets.all(12.0),
+                                blockSpacing: 8.0,
+                              ),
+                              selectable: true,
+                            );
+                          } catch (e) {
+                            // Fallback to simple text display on error
+                            debugPrint('Error rendering message markdown: $e');
+                            return Text(
+                              message.content.isNotEmpty
+                                  ? message.content
+                                  : ' ',
+                              style: TextStyle(
                                 color:
                                     isUser
                                         ? Colors.white
@@ -306,59 +431,8 @@ class MessageBubble extends StatelessWidget {
                                           context,
                                         ).colorScheme.onSurfaceVariant,
                               ),
-                              code: TextStyle(
-                                backgroundColor:
-                                    isUser
-                                        ? Theme.of(context).colorScheme.primary
-                                        : Theme.of(context)
-                                            .colorScheme
-                                            .surfaceContainerHighest
-                                            .withOpacity(0.7),
-                                color:
-                                    isUser
-                                        ? Colors.white.withOpacity(0.9)
-                                        : Theme.of(context).colorScheme.primary,
-                                fontFamily: 'monospace',
-                                fontSize: 14.0,
-                              ),
-                              codeblockDecoration: BoxDecoration(
-                                color:
-                                    isUser
-                                        ? Theme.of(
-                                          context,
-                                        ).colorScheme.primary.withOpacity(0.5)
-                                        : Theme.of(context)
-                                            .colorScheme
-                                            .surfaceContainerHighest
-                                            .withOpacity(0.5),
-                                borderRadius: BorderRadius.circular(8.0),
-                                border: Border.all(
-                                  color:
-                                      isUser
-                                          ? Colors.white.withOpacity(0.2)
-                                          : Theme.of(context).dividerColor,
-                                  width: 1.0,
-                                ),
-                              ),
-                              codeblockPadding: const EdgeInsets.all(12.0),
-                              blockSpacing: 8.0,
-                            ),
-                            selectable: true,
-                          );
-                        } catch (e) {
-                          // Fallback to simple text display on error
-                          debugPrint('Error rendering message markdown: $e');
-                          return Text(
-                            message.content.isNotEmpty ? message.content : ' ',
-                            style: TextStyle(
-                              color:
-                                  isUser
-                                      ? Colors.white
-                                      : Theme.of(
-                                        context,
-                                      ).colorScheme.onSurfaceVariant,
-                            ),
-                          );
+                            );
+                          }
                         }
                       },
                     ),

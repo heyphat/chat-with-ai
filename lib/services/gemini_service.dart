@@ -3,10 +3,12 @@ import 'package:google_generative_ai/google_generative_ai.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/message.dart';
 import '../models/token_usage.dart';
+import '../models/chat.dart';
 import 'ai_service.dart';
-import 'dart:developer' as developer;
+import 'logger_service.dart';
 
 class GeminiService implements AIService {
+  final LoggerService _logger = LoggerService();
   TokenUsage? _lastStreamTokenUsage;
 
   @override
@@ -28,7 +30,11 @@ class GeminiService implements AIService {
 
       // Convert to a simple prompt text
       final promptText = _convertMessagesToPrompt(messages);
-      developer.log('Sending request to Gemini with model: $model');
+      _logger.info(
+        'Sending request to Gemini',
+        tag: 'GEMINI',
+        data: {'model': model},
+      );
 
       // Create a simple text-only content
       final prompt = [Content.text(promptText)];
@@ -43,13 +49,60 @@ class GeminiService implements AIService {
         responseText = 'No response from Gemini';
       }
 
-      // Gemini API doesn't currently provide token usage info in the same way as OpenAI
-      // But we could estimate it in the future
-      final TokenUsage? tokenUsage = null;
+      // Extract token usage from Gemini response if available
+      TokenUsage? tokenUsage;
+      if (response.usageMetadata != null) {
+        // Get cost calculation pricing data
+        final pricingData =
+            TokenPricing.defaultPricing().pricePerThousandTokens;
+
+        // Calculate costs
+        final promptTokens = response.usageMetadata?.promptTokenCount ?? 0;
+        final completionTokens =
+            response.usageMetadata?.candidatesTokenCount ?? 0;
+        final totalTokens = response.usageMetadata?.totalTokenCount ?? 0;
+
+        final String modelKey =
+            pricingData.containsKey(model) ? model : 'default';
+        final promptRate =
+            pricingData['${modelKey}_prompt'] ??
+            pricingData['default_prompt'] ??
+            0;
+        final completionRate =
+            pricingData['${modelKey}_completion'] ??
+            pricingData['default_completion'] ??
+            0;
+
+        final promptCost = (promptTokens / 1000) * promptRate;
+        final completionCost = (completionTokens / 1000) * completionRate;
+        final totalCost = promptCost + completionCost;
+
+        tokenUsage = TokenUsage(
+          promptTokens: promptTokens,
+          completionTokens: completionTokens,
+          totalTokens: totalTokens,
+          promptCost: promptCost,
+          completionCost: completionCost,
+          totalCost: totalCost,
+          model: model,
+          provider: AIProvider.gemini,
+        );
+
+        _logger.info(
+          'Token usage information',
+          tag: 'GEMINI',
+          data: {
+            'promptTokens': tokenUsage.promptTokens,
+            'completionTokens': tokenUsage.completionTokens,
+            'totalTokens': tokenUsage.totalTokens,
+            'totalCost': tokenUsage.totalCost,
+          },
+        );
+      }
 
       return (responseText, tokenUsage);
     } catch (e) {
-      developer.log('Error in Gemini completion: $e');
+      _logger.error('Error in Gemini completion', tag: 'GEMINI', error: e);
       throw Exception('Error connecting to Gemini: $e');
     }
   }
@@ -73,21 +126,91 @@ class GeminiService implements AIService {
 
       // Convert to a simple prompt text
       final promptText = _convertMessagesToPrompt(messages);
-      developer.log('Starting Gemini streaming with model: $model');
+      _logger.info(
+        'Starting Gemini streaming',
+        tag: 'GEMINI',
+        data: {'model': model},
+      );
 
       // Create a simple text-only content
       final prompt = [Content.text(promptText)];
 
+      // Clear the previous token usage in case we're reusing this service instance
+      _lastStreamTokenUsage = null;
+
       // Generate content as a stream
       final responseStream = modelInstance.generateContentStream(prompt);
+      int chunkCount = 0;
+      GenerateContentResponse? lastResponse;
 
       await for (final response in responseStream) {
+        lastResponse = response;
+        chunkCount++;
+
+        // Process the chunk
         if (response.text != null) {
           yield response.text!;
         }
       }
+
+      // After streaming is complete, extract token usage from the last response if available
+      if (lastResponse != null && lastResponse.usageMetadata != null) {
+        // Get cost calculation pricing data
+        final pricingData =
+            TokenPricing.defaultPricing().pricePerThousandTokens;
+
+        // Calculate costs
+        final promptTokens = lastResponse.usageMetadata?.promptTokenCount ?? 0;
+        final completionTokens =
+            lastResponse.usageMetadata?.candidatesTokenCount ?? 0;
+        final totalTokens = lastResponse.usageMetadata?.totalTokenCount ?? 0;
+
+        final String modelKey =
+            pricingData.containsKey(model) ? model : 'default';
+        final promptRate =
+            pricingData['${modelKey}_prompt'] ??
+            pricingData['default_prompt'] ??
+            0;
+        final completionRate =
+            pricingData['${modelKey}_completion'] ??
+            pricingData['default_completion'] ??
+            0;
+
+        final promptCost = (promptTokens / 1000) * promptRate;
+        final completionCost = (completionTokens / 1000) * completionRate;
+        final totalCost = promptCost + completionCost;
+
+        _lastStreamTokenUsage = TokenUsage(
+          promptTokens: promptTokens,
+          completionTokens: completionTokens,
+          totalTokens: totalTokens,
+          promptCost: promptCost,
+          completionCost: completionCost,
+          totalCost: totalCost,
+          model: model,
+          provider: AIProvider.gemini,
+        );
+
+        _logger.info(
+          'Stream token usage information found after streaming complete',
+          tag: 'GEMINI',
+          data: {
+            'promptTokens': _lastStreamTokenUsage?.promptTokens,
+            'completionTokens': _lastStreamTokenUsage?.completionTokens,
+            'totalTokens': _lastStreamTokenUsage?.totalTokens,
+            'totalCost': _lastStreamTokenUsage?.totalCost,
+            'chunkCount': chunkCount,
+          },
+        );
+      } else {
+        _logger.info(
+          'No token usage information available in streaming response',
+          tag: 'GEMINI',
+          data: {'chunkCount': chunkCount},
+        );
+      }
     } catch (e) {
-      developer.log('Error in Gemini streaming: $e');
+      _logger.error('Error in Gemini streaming', tag: 'GEMINI', error: e);
       throw Exception('Error connecting to Gemini: $e');
     }
   }
@@ -134,7 +257,7 @@ class GeminiService implements AIService {
       final envKey = dotenv.env['GEMINI_API_KEY'] ?? '';
       return envKey;
     } catch (e) {
-      developer.log('Error retrieving Gemini API key: $e');
+      _logger.error('Error retrieving Gemini API key', tag: 'GEMINI', error: e);
       return '';
     }
   }

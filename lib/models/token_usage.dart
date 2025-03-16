@@ -105,11 +105,8 @@ class TokenUsage {
       }
 
       if (usage == null) {
-        print('No usage data found in OpenAI response');
         return null;
       }
-
-      print('OpenAI usage keys: ${usage.keys.toList()}');
 
       // Try to extract token counts, handling different possible field names
       int? promptTokens = _extractTokenCount(usage, [

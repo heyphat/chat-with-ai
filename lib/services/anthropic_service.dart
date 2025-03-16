@@ -114,7 +114,13 @@ class AnthropicService implements AIService {
               final String content = jsonResponse['content'][0]['text'];
               final TokenUsage? tokenUsage =
                   jsonResponse.containsKey('usage')
-                      ? TokenUsage.fromAnthropic(jsonResponse, model)
+                      ? TokenUsage.fromAnthropic(
+                        jsonResponse,
+                        model,
+                        costPerThousandTokens:
+                            TokenPricing.defaultPricing()
+                                .pricePerThousandTokens,
+                      )
                       : null;
               return (content, tokenUsage);
             } else if (jsonResponse.containsKey('content')) {
@@ -422,6 +428,27 @@ class AnthropicService implements AIService {
 
             if (content.isNotEmpty) {
               yield content;
+            }
+
+            // Extract token usage if present in the final response
+            if (content.isNotEmpty) {
+              try {
+                _lastStreamTokenUsage = TokenUsage.fromAnthropic(
+                  jsonResponse,
+                  model,
+                  costPerThousandTokens:
+                      TokenPricing.defaultPricing().pricePerThousandTokens,
+                );
+                developer.log(
+                  'Extracted token usage from final Anthropic response',
+                  name: 'ANTHROPIC',
+                );
+              } catch (e) {
+                developer.log(
+                  'Error extracting token usage from final Anthropic response: $e',
+                  name: 'ANTHROPIC',
+                );
+              }
             }
           } else {
             throw Exception(

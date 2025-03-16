@@ -1,4 +1,5 @@
 import 'token_usage.dart';
+import 'package:flutter/material.dart';
 
 enum MessageRole { user, assistant, system }
 
@@ -10,6 +11,7 @@ class Message {
   final bool isLoading;
   final String? error;
   final TokenUsage? tokenUsage;
+  Widget? renderedContent; // Pre-rendered markdown widget
 
   Message({
     required this.id,
@@ -19,6 +21,7 @@ class Message {
     this.isLoading = false,
     this.error,
     this.tokenUsage,
+    this.renderedContent,
   });
 
   factory Message.fromJson(Map<String, dynamic> json) {
@@ -56,6 +59,7 @@ class Message {
     bool? isLoading,
     String? error,
     TokenUsage? tokenUsage,
+    Widget? renderedContent,
   }) {
     return Message(
       id: id ?? this.id,
@@ -65,6 +69,7 @@ class Message {
       isLoading: isLoading ?? this.isLoading,
       error: error ?? this.error,
       tokenUsage: tokenUsage ?? this.tokenUsage,
+      renderedContent: renderedContent ?? this.renderedContent,
     );
   }
 }

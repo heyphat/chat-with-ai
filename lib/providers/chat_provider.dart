@@ -36,6 +36,8 @@ class ChatProvider extends ChangeNotifier {
   // Add OpenAI model options
   static const Map<String, String> openAIModels = {
     'gpt-4o-mini': 'GPT-4o Mini',
+    // 'gpt-4o-mini-search-preview-2025-03-11': 'GPT-4o Mini Search Preview',
+    // 'gpt-4o-mini-reason-preview-2025-03-11': 'GPT-4o Mini Reasoning Preview',
     'gpt-4o': 'GPT-4o',
     'gpt-4': 'GPT-4',
     'gpt-4-turbo': 'GPT-4 Turbo',
@@ -44,9 +46,9 @@ class ChatProvider extends ChangeNotifier {
 
   // Add Anthropic model options
   static const Map<String, String> anthropicModels = {
-    'claude-3-opus': 'Claude 3 Opus',
-    'claude-3-sonnet': 'Claude 3 Sonnet',
-    'claude-3-haiku': 'Claude 3 Haiku',
+    // 'claude-3-opus': 'Claude 3 Opus',
+    // 'claude-3-sonnet': 'Claude 3 Sonnet',
+    // 'claude-3-haiku': 'Claude 3 Haiku',
   };
 
   // Add Gemini model options
@@ -134,6 +136,51 @@ class ChatProvider extends ChangeNotifier {
     // Remove chat data from storage
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('$_chatDataPrefix$chatId');
+  }
+
+  // Copy a chat
+  Future<String> copyChat(String chatId) async {
+    // Load the chat to copy if it's not the active chat or in cache
+    Chat chatToCopy;
+    if (_activeChat != null && _activeChat!.id == chatId) {
+      chatToCopy = _activeChat!;
+    } else if (_chatCache.containsKey(chatId)) {
+      chatToCopy = _chatCache[chatId]!;
+    } else {
+      // Load from storage
+      await loadChatContent(chatId);
+      chatToCopy = _activeChat!;
+    }
+
+    // Create a new chat with the same properties but new ID
+    final newChat = Chat(
+      id: _uuid.v4(),
+      title: '${chatToCopy.title} (Copy)',
+      messages: List.from(chatToCopy.messages), // Copy all messages
+      provider: chatToCopy.provider,
+      model: chatToCopy.model,
+      createdAt: DateTime.now(),
+      updatedAt: DateTime.now(),
+    );
+
+    // Create metadata
+    final metadata = ChatMetadata.fromChat(newChat);
+
+    // Update state
+    _chatMetadata.add(metadata);
+    _sortChatMetadata(); // Sort to ensure most recent is first
+
+    // Save to storage
+    await _saveChatMetadataToPrefs();
+    await _saveChatToPrefs(newChat);
+
+    // Update the cache
+    _chatCache[newChat.id] = newChat;
+
+    notifyListeners();
+
+    // Return the new chat ID
+    return newChat.id;
   }
 
   // Set active chat - with lazy loading

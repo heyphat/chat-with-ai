@@ -4,8 +4,11 @@ import 'package:provider/provider.dart';
 import '../models/chat.dart';
 import '../providers/chat_provider.dart';
 import '../screens/chat_history_screen.dart';
-// import '../router/app_navigation.dart';
+import '../router/app_navigation.dart';
 // import '../router/browser_url_manager.dart';
+
+// Define swipe actions enum
+enum _SwipeAction { delete, copy }
 
 class ChatSidebar extends StatelessWidget {
   final Function(String) onChatSelected;
@@ -182,105 +185,165 @@ class _ChatListItem extends StatelessWidget {
     final String dateText = _formatDate(metadata.updatedAt);
     final String messagePreview =
         metadata.lastMessagePreview ?? 'No messages yet';
+    final chatProvider = Provider.of<ChatProvider>(context, listen: false);
 
-    return InkWell(
-      onTap: () {
-        // Only call the parent callback, avoid multiple navigation calls
-        onTap();
+    return Dismissible(
+      key: ValueKey('dismissible-${metadata.id}'),
+      direction:
+          DismissDirection.endToStart, // Only allow swipe from right to left
+      background: Container(
+        color: Colors.transparent,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            // Delete action
+            Container(
+              color: Colors.red,
+              width: 80,
+              alignment: Alignment.center,
+              child: const Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.delete, color: Colors.white),
+                  Text(
+                    'Delete',
+                    style: TextStyle(color: Colors.white, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+            // Copy action
+            Container(
+              color: Colors.blue,
+              width: 80,
+              alignment: Alignment.center,
+              child: const Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.copy, color: Colors.white),
+                  Text(
+                    'Copy',
+                    style: TextStyle(color: Colors.white, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+      confirmDismiss: (direction) async {
+        if (direction == DismissDirection.endToStart) {
+          // Show action selection dialog
+          final action = await _showActionSelectionDialog(
+            context,
+            chatProvider,
+          );
+          if (action == _SwipeAction.delete) {
+            _showDeleteConfirmation(context, chatProvider);
+          } else if (action == _SwipeAction.copy) {
+            _handleCopy(context, chatProvider);
+          }
+        }
+        // Always return false to prevent actual dismissal
+        return false;
       },
-      onLongPress: onLongPress,
-      child: Container(
+      child: Material(
         color:
             isActive
                 ? Theme.of(
                   context,
                 ).colorScheme.primaryContainer.withOpacity(0.3)
                 : null,
-        child: ListTile(
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 16.0,
-            vertical: 8.0,
-          ),
-          title: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  metadata.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
-                  ),
-                ),
-              ),
-              Text(
-                dateText,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ],
-          ),
-          subtitle: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const SizedBox(height: 4),
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      messagePreview,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+        child: InkWell(
+          onTap: onTap,
+          onLongPress: onLongPress,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: 16.0,
+              vertical: 8.0,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        metadata.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontWeight:
+                              isActive ? FontWeight.bold : FontWeight.normal,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      dateText,
                       style: TextStyle(
-                        fontSize: 13,
+                        fontSize: 12,
                         color: Theme.of(context).colorScheme.onSurfaceVariant,
                       ),
                     ),
-                  ),
-                  if (metadata.messageCount > 0)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        color:
-                            Theme.of(
-                              context,
-                            ).colorScheme.surfaceContainerHighest,
-                        borderRadius: BorderRadius.circular(10),
-                      ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    Expanded(
                       child: Text(
-                        '${metadata.messageCount}',
+                        messagePreview,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: TextStyle(
-                          fontSize: 11,
+                          fontSize: 13,
                           color: Theme.of(context).colorScheme.onSurfaceVariant,
                         ),
                       ),
                     ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Row(
-                children: [
-                  Chip(
-                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    visualDensity: VisualDensity.compact,
-                    label: Text(
-                      _getModelDisplayName(metadata.provider, metadata.model),
-                      style: const TextStyle(fontSize: 10),
+                    if (metadata.messageCount > 0)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color:
+                              Theme.of(
+                                context,
+                              ).colorScheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Text(
+                          '${metadata.messageCount}',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color:
+                                Theme.of(context).colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Wrap(
+                  spacing: 6.0,
+                  runSpacing: 4.0,
+                  children: [
+                    Chip(
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      visualDensity: VisualDensity.compact,
+                      label: Text(
+                        _getModelDisplayName(metadata.provider, metadata.model),
+                        style: const TextStyle(fontSize: 10),
+                      ),
+                      avatar: _getProviderIcon(metadata.provider),
+                      padding: EdgeInsets.zero,
                     ),
-                    avatar: _getProviderIcon(metadata.provider),
-                    padding: EdgeInsets.zero,
-                  ),
 
-                  // Display token information if available
-                  if (metadata.totalTokens != null)
-                    Padding(
-                      padding: const EdgeInsets.only(left: 6.0),
-                      child: Chip(
+                    // Display token information if available
+                    if (metadata.totalTokens != null)
+                      Chip(
                         materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                         visualDensity: VisualDensity.compact,
                         label: Tooltip(
@@ -296,14 +359,132 @@ class _ChatListItem extends StatelessWidget {
                         avatar: const Icon(Icons.token, size: 12),
                         padding: EdgeInsets.zero,
                       ),
-                    ),
-                ],
-              ),
-            ],
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ),
     );
+  }
+
+  // Show delete confirmation dialog - kept for future use
+  void _showDeleteConfirmation(
+    BuildContext context,
+    ChatProvider chatProvider,
+  ) {
+    showDialog(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            title: const Text('Delete Chat'),
+            content: Text(
+              'Are you sure you want to delete "${metadata.title}"?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  chatProvider.deleteChat(metadata.id);
+                },
+                style: TextButton.styleFrom(foregroundColor: Colors.red),
+                child: const Text('Delete'),
+              ),
+            ],
+          ),
+    );
+  }
+
+  // New method to show action selection dialog
+  Future<_SwipeAction?> _showActionSelectionDialog(
+    BuildContext context,
+    ChatProvider chatProvider,
+  ) async {
+    return showDialog<_SwipeAction>(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            title: const Text('Chat Actions'),
+            content: Text(
+              'What would you like to do with "${metadata.title}"?',
+            ),
+            actions: [
+              TextButton.icon(
+                icon: const Icon(Icons.close),
+                label: const Text('Cancel'),
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+              TextButton.icon(
+                icon: const Icon(Icons.copy, color: Colors.blue),
+                label: const Text('Copy', style: TextStyle(color: Colors.blue)),
+                onPressed: () {
+                  Navigator.of(context).pop(_SwipeAction.copy);
+                },
+              ),
+              TextButton.icon(
+                icon: const Icon(Icons.delete, color: Colors.red),
+                label: const Text(
+                  'Delete',
+                  style: TextStyle(color: Colors.red),
+                ),
+                onPressed: () {
+                  Navigator.of(context).pop(_SwipeAction.delete);
+                },
+              ),
+            ],
+          ),
+    );
+  }
+
+  // Handle copy action - kept for future use
+  void _handleCopy(BuildContext context, ChatProvider chatProvider) async {
+    // Show loading indicator
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    scaffoldMessenger.showSnackBar(
+      const SnackBar(
+        content: Text('Copying chat...'),
+        duration: Duration(milliseconds: 1000),
+      ),
+    );
+
+    // Perform the copy operation
+    try {
+      final newChatId = await chatProvider.copyChat(metadata.id);
+
+      // Show success message
+      scaffoldMessenger.showSnackBar(
+        SnackBar(
+          content: const Text('Chat copied successfully'),
+          action: SnackBarAction(
+            label: 'Go to Copy',
+            onPressed: () {
+              // Navigate to the new chat using AppNavigation
+              if (context.mounted) {
+                final navigator = Navigator.of(context);
+                if (navigator.canPop()) {
+                  navigator.pop(); // Close the chat sidebar if open
+                }
+                // Navigate to the copied chat
+                AppNavigation.toChat(newChatId);
+              }
+            },
+          ),
+        ),
+      );
+    } catch (e) {
+      // Show error message
+      scaffoldMessenger.showSnackBar(
+        SnackBar(
+          content: Text('Error copying chat: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   Widget _getProviderIcon(AIProvider provider) {

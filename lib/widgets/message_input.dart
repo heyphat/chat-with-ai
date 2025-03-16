@@ -116,16 +116,16 @@ class _MessageInputState extends State<MessageInput> {
                   children: [
                     // Plus button - only show on larger screens
                     // if (showAllIcons)
-                    IconButton(
-                      icon: const Icon(Icons.add),
-                      onPressed: () {
-                        // Handle attachment functionality
-                      },
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      iconSize: 20,
-                      constraints: const BoxConstraints(),
-                      padding: const EdgeInsets.all(8),
-                    ),
+                    // IconButton(
+                    //   icon: const Icon(Icons.add),
+                    //   onPressed: () {
+                    //     // Handle attachment functionality
+                    //   },
+                    //   color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    //   iconSize: 20,
+                    //   constraints: const BoxConstraints(),
+                    //   padding: const EdgeInsets.all(8),
+                    // ),
 
                     // Globe button - only show on larger screens
                     if (showAllIcons)
@@ -143,7 +143,7 @@ class _MessageInputState extends State<MessageInput> {
                     // Code/refresh button - always show
                     if (showAllIcons)
                       IconButton(
-                        icon: const Icon(Icons.code),
+                        icon: const Icon(Icons.lightbulb_outline),
                         onPressed: () {
                           // Handle code formatting
                         },
