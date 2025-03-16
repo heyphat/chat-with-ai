@@ -47,6 +47,16 @@ ANTHROPIC_API_ENDPOINT=https://api.anthropic.com/v1/messages
 
 You can also enter API keys directly in the app's settings page.
 
+### Run in Web Browser
+
+To run the app specifically in Chrome:
+
+```bash
+flutter run -d chrome
+```
+
+This is particularly useful for web development and testing.
+
 ### Keyboard Shortcuts
 
 The app supports various keyboard shortcuts for improved productivity:
