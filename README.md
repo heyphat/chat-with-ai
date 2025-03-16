@@ -1,18 +1,21 @@
 # AI Chat App
 
-A Flutter app that allows you to chat with various AI providers like OpenAI (ChatGPT), Anthropic (Claude), and Google (Gemini).
+A Flutter application that enables communication with various AI providers including OpenAI (ChatGPT), Anthropic (Claude), and Google (Gemini).
 
 ## Features
 
-- Chat interface with familiar messaging UI
+- Modern chat interface with familiar messaging UI
 - Support for multiple AI providers:
   - OpenAI (GPT-3.5, GPT-4)
   - Anthropic (Claude)
   - Google (Gemini)
-- Dark mode support
-- Chat history management
+- Dark and light theme support
+- Comprehensive chat history management
 - Markdown rendering for AI responses
-- Code highlighting
+- Code syntax highlighting
+- Token usage tracking and cost estimation
+- Cross-platform support (Web, iOS, Android, macOS, Windows, Linux)
+- Keyboard shortcuts for improved productivity
 
 ## Getting Started
 
@@ -25,7 +28,7 @@ A Flutter app that allows you to chat with various AI providers like OpenAI (Cha
 
 1. Clone the repository
 2. Run `flutter pub get` to install dependencies
-3. Create a `.env` file in the root directory with the following content:
+3. Create a `.env` file in the root directory or `assets/.env` with the following content:
 
 ```
 # API Keys for different AI providers
@@ -42,19 +45,57 @@ ANTHROPIC_API_ENDPOINT=https://api.anthropic.com/v1/messages
 4. Replace the placeholder API keys with your actual keys
 5. Run the app with `flutter run`
 
-You can also enter API keys in the app's settings page.
+You can also enter API keys directly in the app's settings page.
 
-### Folder Structure
+### Keyboard Shortcuts
+
+The app supports various keyboard shortcuts for improved productivity:
+
+- Enter: Send message
+- Cmd+B (or Ctrl+B on Windows/Linux): Toggle sidebar
+- Cmd+I (or Ctrl+I on Windows/Linux): Focus on message input
+- Shift+Enter: Insert new line in message
+- Cmd+Shift+N (or Ctrl+Shift+N on Windows/Linux): Create a new chat
+
+## Project Structure
 
 ```
 lib/
-├── models/           # Data models
-├── providers/        # State management
-├── screens/          # App screens
-├── services/         # API services
-├── utils/            # Utilities
-└── widgets/          # Reusable UI components
+├── models/           # Data models for chats, messages, token usage
+├── providers/        # State management with Provider
+├── screens/          # UI screens (home, chat history, settings)
+├── services/         # AI provider integrations (OpenAI, Anthropic, Gemini)
+├── utils/            # Utility functions
+├── widgets/          # Reusable UI components
+└── router/           # App navigation and routing
 ```
+
+### Key Components
+
+#### Models
+
+- `chat.dart`: Defines chat data structures
+- `message.dart`: Message model for chat conversations
+- `token_usage.dart`: Token usage tracking and cost estimation
+
+#### Services
+
+- `openai_service.dart`: Integration with OpenAI APIs
+- `anthropic_service.dart`: Integration with Anthropic APIs
+- `gemini_service.dart`: Integration with Google Gemini APIs
+- `logger_service.dart`: Logging functionality
+- `message_renderer.dart`: Rendering chat messages
+
+#### Providers
+
+- `chat_provider.dart`: Manages chat state and interactions
+- `theme_provider.dart`: Handles app theme (dark/light mode)
+
+#### Screens
+
+- `home_screen.dart`: Main chat interface
+- `chat_history_screen.dart`: View and manage chat history
+- `settings_screen.dart`: Configure app settings and API keys
 
 ## Usage
 
@@ -62,7 +103,7 @@ lib/
 2. Create a new chat by clicking the "+ New Chat" button
 3. Select an AI provider and model
 4. Type your message and hit send
-5. View the AI's response
+5. View the AI's response with markdown and code highlighting support
 
 ## Contributing
 
@@ -78,176 +119,6 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - [OpenAI API](https://platform.openai.com/)
 - [Anthropic API](https://docs.anthropic.com/claude/reference/getting-started-with-the-api)
 - [Google Gemini API](https://ai.google.dev/)
-
-# Keyboard Manager for Web Applications
-
-A lightweight, flexible keyboard management system for web applications. This module allows you to easily manage keyboard shortcuts, key combinations, and keyboard event handling throughout your application.
-
-## Features
-
-- Register and handle keyboard shortcuts with callbacks
-- Support for modifier keys (Ctrl, Alt, Shift, Meta/Command)
-- Enable/disable specific bindings or all bindings at once
-- Focus-aware: Configure shortcuts to work only when specific elements are or aren't focused
-- TypeScript support with full type definitions
-- Smart context detection for input fields
-
-## Installation
-
-For now, simply copy the `keyboardManager.ts` file into your project. In the future, this could be packaged as an npm module.
-
-### TypeScript Compilation
-
-If you're using TypeScript, make sure to compile the module to JavaScript:
-
-```bash
-tsc keyboardManager.ts
-```
-
-## Basic Usage
-
-```typescript
-import keyboardManager from "./keyboardManager";
-
-// Register a simple key shortcut
-keyboardManager.register({
-  key: "Escape",
-  description: "Close modal",
-  callback: () => {
-    closeModal();
-  },
-});
-
-// Register a key combination with modifiers
-keyboardManager.register({
-  key: "s",
-  ctrl: true,
-  description: "Save document (Ctrl+S)",
-  callback: (event) => {
-    saveDocument();
-  },
-});
-
-// Clean up when your component is destroyed
-function cleanup() {
-  keyboardManager.destroy();
-}
-```
-
-## Advanced Usage Examples
-
-### Enter to Send Message in Input Fields
-
-```typescript
-// Register Enter key to send messages from input fields
-keyboardManager.register({
-  key: "Enter",
-  description: "Send message when typing in input field",
-  allowInInput: true, // Important: allow this shortcut to work in input fields
-  callback: (event) => {
-    // Get the active input element
-    const activeElement = document.activeElement;
-
-    // Only proceed if it's an input field and has text
-    if (
-      activeElement &&
-      (activeElement instanceof HTMLInputElement ||
-        activeElement instanceof HTMLTextAreaElement) &&
-      (activeElement as HTMLInputElement | HTMLTextAreaElement).value.trim() !==
-        ""
-    ) {
-      // Get the message from the input field
-      const message = (activeElement as HTMLInputElement | HTMLTextAreaElement)
-        .value;
-
-      // Send the message (your implementation here)
-      sendMessage(message);
-
-      // Clear the input field
-      (activeElement as HTMLInputElement | HTMLTextAreaElement).value = "";
-
-      // Prevent the default Enter behavior (adding a new line in textarea)
-      event.preventDefault();
-    }
-  },
-});
-```
-
-### Toggle Sidebar with Cmd+B
-
-```typescript
-// Register Cmd+B to toggle sidebar
-keyboardManager.register({
-  key: "b",
-  meta: true, // Command key on Mac, Windows/Super key on Windows/Linux
-  description: "Toggle sidebar (Cmd+B)",
-  callback: (event) => {
-    const sidebar = document.getElementById("sidebar");
-    if (sidebar) {
-      sidebar.style.display =
-        sidebar.style.display === "none" ? "block" : "none";
-    }
-  },
-});
-```
-
-## API Reference
-
-### KeyBinding Options
-
-| Property         | Type       | Description                                               | Default        |
-| ---------------- | ---------- | --------------------------------------------------------- | -------------- |
-| `key`            | `string`   | The key value (e.g., 'a', 'Enter', 'ArrowUp')             | (required)     |
-| `callback`       | `Function` | Function to call when key is pressed                      | (required)     |
-| `description`    | `string`   | Description for this binding                              | `undefined`    |
-| `ctrl`           | `boolean`  | Whether Ctrl key should be pressed                        | `false`        |
-| `alt`            | `boolean`  | Whether Alt key should be pressed                         | `false`        |
-| `shift`          | `boolean`  | Whether Shift key should be pressed                       | `false`        |
-| `meta`           | `boolean`  | Whether Meta/Command key should be pressed                | `false`        |
-| `preventDefault` | `boolean`  | Whether to prevent default browser behavior               | `true`         |
-| `enabled`        | `boolean`  | Whether this binding is currently enabled                 | `true`         |
-| `allowInInput`   | `boolean`  | Whether to trigger even when an input/textarea is focused | `false`        |
-| `id`             | `string`   | Optional identifier for this binding                      | Auto-generated |
-
-### Methods
-
-#### `register(binding: KeyBinding): string`
-
-Registers a new key binding and returns its ID.
-
-#### `unregister(id: string): boolean`
-
-Unregisters a key binding by its ID. Returns `true` if successful.
-
-#### `setBindingEnabled(id: string, enabled: boolean): boolean`
-
-Enables or disables a specific binding. Returns `true` if successful.
-
-#### `setEnabled(enabled: boolean): void`
-
-Enables or disables all keyboard bindings.
-
-#### `getBindings(): KeyBinding[]`
-
-Returns all registered keyboard bindings.
-
-#### `destroy(): void`
-
-Cleans up event listeners. Call this when you no longer need the keyboard manager.
-
-## Demo
-
-Open the `index.html` file in a browser to see a demonstration of the keyboard manager in action. The demo includes examples of:
-
-- Basic keyboard shortcuts (Escape, Ctrl+S, Ctrl+Z)
-- Special shortcuts that work in input fields (F1, Enter to send)
-- Modifier key combinations (Cmd+B to toggle sidebar)
-- Enabling/disabling shortcuts
-
-## Browser Support
-
-This module should work in all modern browsers that support ES6 features.
-
-## License
-
-MIT
+- [Provider package](https://pub.dev/packages/provider) for state management
+- [Flutter Markdown](https://pub.dev/packages/flutter_markdown) for rendering markdown content
+- [Flutter Chat UI](https://pub.dev/packages/flutter_chat_ui) for chat interface components
